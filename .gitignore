@@ -6,6 +6,9 @@
 .piolibdeps/
 firmware/.pio/
 
+# ホストテストが tag から clone してくる batch-uplink の控え
+firmware/.cache/
+
 # Python
 __pycache__/
 *.py[cod]

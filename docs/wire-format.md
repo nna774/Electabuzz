@@ -48,6 +48,34 @@
   ([wire.py:37-40](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L37-L40) の式を踏襲)。
   ADC レートは `fs_measured_uhz` に別途持つ
 
+### `magic` のバイト順
+
+**`0x47465251` は「バイト列 `"GFRQ"` を大端読みした値」であり、線上のバイト順は `Q R F G`
+になる。** Namazu の `kWireMagic`(`0x4E414D5A`、線上は `Z M A N`)と同じ流儀だ。
+目的は誤送信の fail-fast であって、**両実装が同じ値を使うことだけが要件**なので、
+線上で読める向きに並べ直す利得は無い(直すと Namazu と流儀が食い違うぶん損)。
+
+### `flags` のビット割り当て (バッチ単位)
+
+| bit | 名前 | 意味 |
+|---|---|---|
+| 0 | `pps_locked` | この区間で PPS を捕捉できていた |
+| 1 | `gnss_fix` | GNSS が測位できていた(PPS の質の傍証) |
+| 2 | `discontinuity` | 直前のバッチと累積位相が繋がっていない |
+| 3 | `power_fail` | 商用電源の断を検出した区間を含む |
+| 4 | `tb_extrapolated` | 時間基準が外挿(holdover)だった |
+
+### `crc32` の版
+
+**CRC-32/ISO-HDLC** (多項式 `0xEDB88320` 反転表現、初期値・最終 XOR とも `0xFFFFFFFF`)。
+**Python の `zlib.crc32` とバイト等価**になる版を選んである。ここが食い違うと
+Lambda 側が全バッチを壊れていると判定するので、**実装には既知ベクタのテストを置く**
+(`crc32("123456789") == 0xCBF43926`)。
+
+対象は `records()` から `recordsSize()` バイトだけで、ヘッダも tail も含めない。
+**将来 tail を使うことにしても、この範囲を広げてはいけない**(既存データの検証が壊れる)。
+そのときは別フィールドを足す。
+
 ## ペイロード: 12バイト固定長レコード × N
 
 | Type | Field |
@@ -58,6 +86,14 @@
 
 レンジ確認: 50Hz × 86400s × 65536 = 2.8e14/日 → u64 で約6万年(60Hz なら 3.4e14/日)。
 分解能 2^-16 サイクル = 50Hz で 0.31µs、60Hz で 0.25µs 相当。
+
+**レコードの `flags` はまだ1ビットも割り当てていない。** 何を品質として立てるかは
+位相推定の実装が決めることで、**それが無い今に決めると「存在しない要件への一般化」になる。**
+フィールドは確保してあるので、DSP 側が立てたいものを持ち込んだ時点で定義を足せばよい。
+
+**`v_rms_mv` の基準点は未確定だ。** 商用の 100V を mV で持つと u16(最大 65.535V)に
+収まらないので、**トランス二次側の実効値[mV]** か、**壁側に換算した別単位**かを決める必要がある。
+→ [open-questions.md](open-questions.md)
 
 1バッチ = 64 + 30×12 = **424 バイト**(当初案と同サイズだが、無駄なフィールドがない)。
 既存の 100Hz×3軸バッチ(18KB)の 1/43。`kMaxRamBatches = 6` でも RAM 消費は無視できる。
@@ -83,6 +119,26 @@ Batch(/*capacityRecords=*/30, /*recordBytes=*/12, /*headerBytes=*/64, /*tailCapa
 
 `Batch` は最後まで中身を知らない。書くのは `lib/GridFreq` 側の薄い層で、
 Namazu の `lib/NamzWire` と同じ役回りだ。→ [batch-uplink.md](batch-uplink.md)
+
+**実装は `firmware/lib/GridFreq/`(`WireFormat.h` = レイアウト、`GridFreqWire.h/.cpp` =
+`Batch` への載せかた)。** ホストの g++ で `firmware/lib/GridFreq/test/run.sh` が走る。
+
+**`fillHeader()` に渡す構造体には、`Batch` から出る値も形式が決めている定数も入れていない。**
+`batch_start_us`/`record_count`/`crc32` は `Batch` から、`magic`/`version`/`record_format`/
+`header_len`/`record_rate_mhz` は形式から出る。**二重に持てるものを持たせなければ食い違いようがない。**
+
+`f_nominal_mhz` の既定値は **`0`(未判別)** にしてある。設置先が 50Hz 地域でも `50000` を
+既定にはしない。**測っていない値がもっともらしく記録されるのが最悪だからだ**
+(同じ理由で `timebase_source` の既定は `NOMINAL` = 何も主張しない側)。
+
+## パーサ側 (`wire_gridfreq.py`)
+
+ヘッダは Python の `struct` で1行になる(**パディングが入らないことを確認済み**)。
+
+```python
+HEADER_FMT = "<IBBHQIIIIIQIIHBbII"   # calcsize == 64
+RECORD_FMT = "<QHH"                  # calcsize == 12
+```
 
 認証ヘッダ名は `X-Namz-*` のままでよい(HMAC の仕組みは共有ライブラリ側で、
 ヘッダ名は既存と同一。無理に改名する利得がない)。
