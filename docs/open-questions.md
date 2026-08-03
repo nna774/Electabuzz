@@ -11,6 +11,13 @@
 | **powerk95** | 測定方式と時間基準（ゼロクロスか位相推定か、NTP か GPS か）。CSV/API の取得方法・粒度・遡れる期間。**bot を 403 で弾くのでブラウザで見ること** |
 | PCM1808 データシート | DIGITAL FILTER CHARACTERISTICS 表から **HPF コーナーの実数値**。無効化可否。**優先度低**（デジタルなので熱ドリフトせず、定数位相は微分で消えるため結論が変わらない） |
 
+## 設計を進めると決まること
+
+| 対象 | 決めること |
+|---|---|
+| **S3 の prefix** | `batch-uplink` v1.0.0 の `s3util` は `raw/` と `events/` を**定数で持っている**（引数化していない。未凍結の要件に knob を足さない判断）。Electabuzz が別 prefix（ロールアップの `series/` 等）を要ると確定したら、**v1.1.0 で引数化する**。ただし `raw_key` と `raw_hour_prefixes` は**同じ prefix を使わないと列挙が壊れる**ので、別々の任意引数にはせず一括で渡す形にすること。→ [storage.md](storage.md) |
+| **`GFRQ` に tail を持たせるか** | 現状の想定は**持たない**（`tailCapacity = 0`）。`header_len` の自己記述で拡張路は確保済みなので、使う当てのない尻尾を今から予約する理由が無い。→ [wire-format.md](wire-format.md) |
+
 ## 購入時に確認すること
 
 | 対象 | 確認内容 |

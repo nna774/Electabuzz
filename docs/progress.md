@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-03 | **`batch-uplink` v1.0.0 が出た。切り出し完了、`v1.1.0` は要らなくなった。** 一般化を Namazu 側で先に済ませてから移す順序に反転したため、**両プロジェクトが同じ v1.0.0 を指す**。**`Batch` の契約が確定**し、`GFRQ` の寸法(64Bヘッダ + 12Bレコード + tail無し)がそのまま載ることを確認済み。`finalize()` は不要になり `bytes()` は純粋な getter。**`sendAlert` が一般化された**ので速報本文を自由に設計できる。**設計書の「ArduinoJson が要る」は誤りで C++/Python とも依存ゼロ**。ただし [batch-uplink.md](batch-uplink.md) 本体は未修正で、このログと食い違っている | [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md) |
 | 2026-08-03 | **母艦は ESP32-S3。ただし S3 必須ではないと確定した**（無印 ESP32 でも全要件を満たす）。S3 を採る理由は **MCLK 出力ピンの自由度だけ**（無印は GPIO 0/1/3 に限られ、ブートストラップピンかシリアルコンソールを諦めることになる）。**設計書の S3 に関する記述が2つ誤りだった: ETM は S3 に無い**（方式B は MCPWM capture のみ）、**APLL は S3 に無く無印 ESP32 にある**。どちらも結論を覆さない | [log/2026-08-03-mcu-selection.md](log/2026-08-03-mcu-selection.md) |
 | 2026-08-03 | **GNSS を待たずに走らせる方針。時間基準を `NOMINAL`/`NTP`/`PPS` のプラグインにする。** wire format を源非依存に変更（`timebase_source` 等を予約領域から出したので PPS 到着時にヘッダは変わらない）。共有レポ名を `batch-uplink` に決定。**新発見: `fs` を決めているのが ESP32 の水晶か PCM1808 の缶発振器か未確定だった**（リスク10）。レポジトリを立てて設計書を13ドキュメントへ分割 | [log/2026-08-03-timebase-plugin.md](log/2026-08-03-timebase-plugin.md) |
 | 2026-08-03 | **フェーズ0（紙の調査）が決着。** 東電PG/OCCTO は系統周波数を公開しておらず、当初の照合先は存在しなかった。代わりに [powerk95](https://powerk95.net/50Hz/) を発見し**外部照合先を確保**。**PCM1808 の HPF はデジタル**と確認しリスク2が消滅。先行実装（W53SA 氏）の構成が判明し、**方式B の動く先行例があると分かった** | [log/2026-08-03-phase0-external-reference.md](log/2026-08-03-phase0-external-reference.md) |
@@ -14,15 +15,20 @@
 
 | | |
 |---|---|
-| 確定済み | AC入力部（実測済み）、共有レポ名 `batch-uplink`、wire format `GFRQ` v1 |
+| 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.0.0**（public・切り出し済み。`Batch` の契約が確定） |
 | 手持ちハードウェア | **ESP32-S3**（本番用に採用）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
 | 未入手 | PCM1808、GNSS 受信機 ×2、アクティブアンテナ、DMM（HIOKI 3244-60） |
 | コード | 未着手 |
 
 ### 着手可能なタスク
 
-- **`batch-uplink` の切り出し → v1.0.0** — ハードウェア不要。優先度が高い
-  （稼働中の地震計を巻き込むリスクを消す作業）。→ [batch-uplink.md](batch-uplink.md)
+- ~~**`batch-uplink` の切り出し → v1.0.0**~~ **済み**（2026-08-03。Namazu 側で完結した）
+- **[batch-uplink.md](batch-uplink.md) を現物に合わせて直す** — 5件の訂正が要る。
+  **本体とログが食い違ったままなのは危険**（規約では `docs/*.md` が正なので、
+  直すまで古い方が勝つ）。→ [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md)
+- **`GFRQ` ヘッダの組み立てを書く** — ハードウェア不要になった。`Batch` の契約が
+  確定したので、`Batch` への載せかたと `crc32` の埋め方は今すぐ書けてホストの g++ で
+  テストできる。→ [wire-format.md](wire-format.md)
 - **`NtpTimebase` を ESP32-S3 単体で書く** — PCM1808 を待たない。
   数日走らせれば手元の水晶の実 ppm が取れ、リスク10 の片方が埋まる。→ [timebase.md](timebase.md)
 
