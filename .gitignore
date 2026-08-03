@@ -27,3 +27,6 @@ build/
 dist/
 *.zip
 *.bin
+
+# 秘密情報（WiFi・HMAC鍵）。雛形は firmware/src/secrets.h.example
+firmware/**/secrets.h
