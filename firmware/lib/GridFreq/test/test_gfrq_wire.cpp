@@ -4,11 +4,18 @@
 // docs/wire-format.md が offset で書かれている以上、検証もその形でないと
 // 「構造体と同じ間違いをした」ことに気づけない。
 
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "GridFreqWire.h"
+
+// ゴールデンフィクスチャの在処は run.sh が渡す。
+#ifndef GFRQ_GOLDEN_PATH
+#define GFRQ_GOLDEN_PATH "../../../../testdata/gfrq_v1_golden.hex"
+#endif
 
 static int gFailures = 0;
 
@@ -43,6 +50,32 @@ static uint64_t rd64(const uint8_t* p, size_t off) {
   uint64_t v = 0;
   for (int i = 7; i >= 0; --i) v = (v << 8) | p[off + i];
   return v;
+}
+
+// '#' から行末までコメント、空白は全て無視。フィクスチャの書式は
+// testdata/gfrq_v1_golden.hex の頭に書いてある。
+static bool loadHex(const char* path, std::vector<uint8_t>& out) {
+  FILE* fp = std::fopen(path, "rb");
+  if (!fp) { printf("FAIL フィクスチャを開けない: %s\n", path); return false; }
+  int hi = -1;
+  for (int c = std::fgetc(fp); c != EOF; c = std::fgetc(fp)) {
+    if (c == '#') {
+      while (c != EOF && c != '\n') c = std::fgetc(fp);
+      continue;
+    }
+    if (std::isspace(c)) continue;
+    int v;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+    else { printf("FAIL フィクスチャに16進でない文字: '%c'\n", c); std::fclose(fp); return false; }
+    if (hi < 0) { hi = v; continue; }
+    out.push_back(static_cast<uint8_t>((hi << 4) | v));
+    hi = -1;
+  }
+  std::fclose(fp);
+  if (hi >= 0) { printf("FAIL フィクスチャの16進が奇数桁\n"); return false; }
+  return true;
 }
 
 int main() {
@@ -178,6 +211,51 @@ int main() {
     checkEq("record_count が積み直した数になる", rd32(b->bytes(), 20), 1);
     checkEq("batch_start_us が更新される", rd64(b->bytes(), 8), 2);
     delete b;
+  }
+
+  // --- ゴールデンフィクスチャと1バイトも違わない ---
+  // 版・CRC の範囲・オフセット・エンディアン・パディングの有無を一度に固定する。
+  // ここが落ちたときは、まず**フィクスチャではなく実装を疑え**。
+  // 書き換えてよいのは形式を変えたとき（version を上げるとき）だけだ。
+  {
+    std::vector<uint8_t> want;
+    if (loadHex(GFRQ_GOLDEN_PATH, want)) {
+      Batch* b = gridfreq::newBatch();
+      b->begin(1750000000123456ull);
+      for (uint32_t i = 0; i < gridfreq::kRecordsPerBatch; ++i) {
+        gridfreq::addRecord(*b, 3276800ull * i, 10500, 0);  // 公称50Hzちょうど
+      }
+      gridfreq::HeaderFields f;
+      f.device_id = 2;
+      f.session_id = 7;
+      f.f_nominal_mhz = 50000;
+      f.fs_measured_uhz = 47998123456ull;
+      f.tb_obs_count = 3600;
+      f.tb_residual_ns = 120;
+      f.flags = kGfrqFlagPpsLocked | kGfrqFlagGnssFix;
+      f.timebase_source = kGfrqTbPps;
+      f.soc_temp_c = 41;
+      gridfreq::fillHeader(*b, f);
+
+      checkEq("フィクスチャの長さ", want.size(), b->size());
+      size_t diff = want.size();
+      if (want.size() == b->size()) {
+        for (size_t i = 0; i < want.size(); ++i) {
+          if (want[i] != b->bytes()[i]) { diff = i; break; }
+        }
+        if (diff == want.size()) {
+          printf("ok   ゴールデンフィクスチャと一致\n");
+        } else {
+          printf("FAIL ゴールデンフィクスチャと不一致: offset %zu で want 0x%02X, got 0x%02X\n",
+                 diff, want[diff], b->bytes()[diff]);
+          ++gFailures;
+        }
+      }
+      checkEqHex("フィクスチャの crc32", rd32(b->bytes(), 60), 0xE849A2B8u);
+      delete b;
+    } else {
+      ++gFailures;
+    }
   }
 
   // --- 既定値は「何も主張しない」側に倒れている ---

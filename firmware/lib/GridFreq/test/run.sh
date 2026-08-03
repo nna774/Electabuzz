@@ -16,6 +16,8 @@ BATCH_UPLINK_TAG=v1.0.0
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIRMWARE="$(cd "$HERE/../../.." && pwd)"
+REPO="$(cd "$FIRMWARE/.." && pwd)"
+GOLDEN="$REPO/testdata/gfrq_v1_golden.hex"
 
 resolve_src() {
   if [ -n "${BATCH_UPLINK_SRC:-}" ]; then
@@ -39,6 +41,7 @@ echo "batch-uplink: $SRC"
 
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 g++ -std=gnu++17 -Wall -Wextra -Werror -I "$SRC" -I "$HERE/../src" \
+  -DGFRQ_GOLDEN_PATH="\"$GOLDEN\"" \
   -o "$OUT/test_gfrq_wire" \
   "$HERE/test_gfrq_wire.cpp" "$HERE/../src/GridFreqWire.cpp" "$SRC/Batch.cpp"
 "$OUT/test_gfrq_wire"
