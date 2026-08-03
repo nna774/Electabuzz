@@ -24,13 +24,15 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**ADC も GNSS も未入手で、MCU だけが手元にある。** コードは
-`firmware/lib/GridFreq/`（`GFRQ` ヘッダの組み立て）だけが在り、**ホストの g++ で
-テストが緑**。送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は
-切り出し済みで **`Batch` の契約は確定している**。ハードウェア待ちのタスクは無い。
+要点だけ言うと、**ADC も GNSS も未入手で、MCU だけが手元にある。**
+**`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
+契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。** 送信基盤
+（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
+**`Batch` の契約は確定している**。
 
 ```sh
-firmware/lib/GridFreq/test/run.sh   # 実機も PlatformIO も要らない
+firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
+.venv/bin/python -m pytest lambda/tests    # repo 直下の .venv（Namazu と同じ形）
 ```
 
 ### 着手可能なタスク（並行して進められる）
@@ -40,10 +42,11 @@ firmware/lib/GridFreq/test/run.sh   # 実機も PlatformIO も要らない
 ティックが I2S のサンプル数か `esp_timer` の µs かを問わない。
 数日走らせれば手元の ESP32-S3 の水晶の実 ppm が取れ、リスク10 の片方が埋まる。
 詳細は [docs/timebase.md](docs/timebase.md)。
+**着手には母艦を挿すこと・基板の型番・`.venv` への platformio 導入が要る。**
 
-**B. `wire_gridfreq.py`（パーサ）を書く** — ハードウェア不要。ワイヤ形式は firmware 側の
-実装で固まっており、Python の `struct` 書式も検証済み。詳細は
-[docs/wire-format.md](docs/wire-format.md)。
+**B. `ingest` Lambda を書く** — ハードウェア不要。パースと検証はもう在るので、
+HMAC 検証（`batch-uplink` の `auth`）と S3 へ置く経路だけ。詳細は
+[docs/cloud.md](docs/cloud.md) と [docs/storage.md](docs/storage.md)。
 
 A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ、待ち時間に B を書く**のが最も詰まらない。
 
