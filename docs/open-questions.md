@@ -16,7 +16,6 @@
 | 対象 | 決めること |
 |---|---|
 | **S3 の prefix** | `batch-uplink` v1.0.0 の `s3util` は `raw/` と `events/` を**定数で持っている**（引数化していない。未凍結の要件に knob を足さない判断）。Electabuzz が別 prefix（ロールアップの `series/` 等）を要ると確定したら、**v1.1.0 で引数化する**。ただし `raw_key` と `raw_hour_prefixes` は**同じ prefix を使わないと列挙が壊れる**ので、別々の任意引数にはせず一括で渡す形にすること。→ [storage.md](storage.md) |
-| **`GFRQ` に tail を持たせるか** | 現状の想定は**持たない**（`tailCapacity = 0`）。`header_len` の自己記述で拡張路は確保済みなので、使う当てのない尻尾を今から予約する理由が無い。→ [wire-format.md](wire-format.md) |
 
 ## 購入時に確認すること
 

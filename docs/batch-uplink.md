@@ -1,5 +1,17 @@
 # batch-uplink: 共通ライブラリの切り出し
 
+> **状態（2026-08-03）**: **切り出しは完了した。**
+> [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれ、
+> **Namazu も Electabuzz も同じ v1.0.0 を指す**。
+> 経緯は [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md)。
+
+```ini
+lib_deps = https://github.com/nna774/batch-uplink.git#v1.0.0
+```
+```bash
+pip install "git+https://github.com/nna774/batch-uplink@v1.0.0"
+```
+
 ## 実コードの調査結果: 流用境界
 
 ### そのまま使える (改造ゼロ)
@@ -12,13 +24,24 @@
 | [firmware/lib/Display/](https://github.com/nna774/NamazuHaUrokoGaNai/tree/master/firmware/lib/Display/) | **参考にするが共有しない。** `ClassFont.h` が震度クラス専用の字形テーブル。Electabuzz 側で作り直す |
 | [lambda/common/auth.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/auth.py) | `verify(device_id, body, sig)` はボディ非依存。`NAMZ_HMAC_SECRET_<id>` で個体別鍵も既に対応済み |
 | [lambda/common/devices.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/devices.py) + watchdog | `record_batch()` はセンサ種別に依存しない。死活監視が device_id 追加だけで効く |
-| [lambda/common/events.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/events.py) / notify.py | `device_prompt`/`cloud_confirmed`/`checked`/`artificial` の状態機械をそのまま使う |
+| [lambda/common/notify.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/notify.py) | `Notifier` 抽象と Slack 実装。通知先は全て env 駆動。**`events.py` は切り出さない**(下記) |
+
+**ただし `Uploader` のうち速報経路 `sendAlert()` だけは地震に染まっていた**
+(`realtime_intensity` / `peak_gal` / `kind:"device_prompt"` がベタ書き)。v1.0.0 では剥がしてあり、
+**本文は呼び出し側が組む**。
+
+```cpp
+bool sendAlert(const char* json, size_t len);
+```
+
+**Electabuzz は速報の JSON を自由に設計できる。** 系統時刻偏差の飛びを速報するならこちらで組む。
+バッチ送信・退避・バックフィルの側は宣言どおり無改造で効いた。
 
 ### 一般化が必要 (具体箇所)
 
-**1. `Batch` をレイアウト非依存にする (v1.1.0 で行う)**
+**1. `Batch` をレイアウト非依存にする (v1.0.0 で完了)**
 
-現状の `Batch` はワイヤ形式を2箇所で知っている。
+切り出し前の `Batch` はワイヤ形式を2箇所で知っていた。
 
 - レコード長が6バイト固定 — [Batch.h:42](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.h#L42)
   `kSampleBytes = 3 * sizeof(int16_t)`、[Batch.h:25](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.h#L25)
@@ -28,22 +51,47 @@
   [Batch.cpp:45](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.cpp#L45)
 
 共有ライブラリに入れるなら、**ワイヤ形式の知識を `Batch` から完全に抜く**のが正しい。
-
-```
-Batch(capacityRecords, recordBytes, headerBytes)   ← 先頭に headerBytes を予約するだけ
-begin(startUs)                                      ← 順序付けに使う startUs のみ保持
-addRecord(const void* rec, size_t len)              ← 固定長レコードを追記
-headerPtr()                                         ← 送信直前に呼び出し側がヘッダを書く
-bytes() / size()                                    ← 純粋な getter。書き戻しをしない
-```
-
 こうすると `Batch` は「ヘッダ領域を予約した固定長レコードのバッファ」になり、
 **どんなワイヤ形式でも載る。** 両プロジェクトが同じバージョンを安全に共有できる。
 
-**2. 「先頭32バイトを変えるな」という制約は存在しない (初期版の誤り)**
+**確定した契約 (v1.0.0)。** 設計時の案から `finalize()` が無くなり、
+`records()`/`recordsSize()`/`tailRemaining()` が増えている。**`GFRQ` を載せる相手はこれだ。**
 
-> **訂正**: 本設計書の初期版は「`fromBytes()` が offset 8/20 を直読みするので v1 の32バイト
-> ヘッダを維持し後ろに拡張ヘッダを追記せよ」と書いていた。**これは誤りだった。**
+```cpp
+Batch(uint32_t capacityRecords, size_t recordBytes, size_t headerBytes,
+      size_t tailCapacity = 0);
+
+void   begin(uint64_t startUs);                  // 順序付けの startUs のみ保持
+bool   addRecord(const void* rec, size_t len);   // len != recordBytes なら false
+bool   appendTail(const void* data, size_t len);
+size_t tailRemaining() const;                    // 分割して書く前の総量確認用
+
+uint8_t*       headerPtr();                      // ここへ呼び出し側がヘッダを書く
+const uint8_t* records() const;                  // ← CRC 計算に要る
+size_t         recordsSize() const;
+uint32_t       recordCount() const;
+size_t         recordBytes() const;
+uint64_t       startUs() const;
+bool           isFull() const;
+
+const uint8_t* bytes() const;                    // 純粋な getter
+size_t         size() const;
+```
+
+**`bytes()` を「書き戻しをしない純粋な getter」にするという設計は実現できた。**
+tail を `addRecord()` のたびに1レコード分だけ後ろへ `memmove` で押し出す形にしたので、
+バッファはいつ見ても完結したバイト列になり、**確定用の呼び出しを忘れるという失敗の形が
+そのものとして消えている**。費用は tail 長ぶんの memmove だけ(Namazu の実測で
+6バイト × 1500レコード/バッチ)で無視できる。
+
+**ヘッダを書く時期は「レコードを積み終えた後・`Uploader` へ渡す前」。** その時点で
+`recordCount()` も `records()` も確定しているので、`record_count` も `crc32` もここで書ける。
+Namazu は `lib/NamzWire` という薄い層でこれをやっており、`lib/GridFreq` も同じ形にする。
+**`GFRQ` の寸法(64Bヘッダ + 12Bレコード + tail なし)がそのまま載ることは Namazu 側のテストで
+確認済み** — `Batch(3, 12, 64, 0)` でヘッダが書けてレコードが侵されないこと、レコード長違いが
+拒否されることまで見てある。
+
+**2. 「先頭32バイトを変えるな」という制約は存在しない**
 
 [Batch::fromBytes](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.cpp#L49-L65) は
 **呼び出し元がゼロの死んだコード**である(`src`/`lib` 全体を grep して確認)。
@@ -101,7 +149,7 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 
 ### 使わない
 
-`lib/Shindo/`、`lib/Iis3dhhc/`、`lib/AccelSensor/`、`tools/jismo/`。
+`lib/Shindo/`、`lib/Iis3dhhc/`、`lib/Adxl355/`、`lib/AccelSensor/`、`lib/NamzWire/`、`tools/jismo/`。
 
 特に **`AccelSensor` 抽象に周波数センサを載せてはいけない。**
 [AccelSensor.h](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/AccelSensor/AccelSensor.h)
@@ -117,20 +165,22 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 バージョン付きの独立レポジトリにし、両者が**タグで pin して参照する**。
 
 ```
-batch-uplink/                        ← 新規。共通ライブラリ。git tag でバージョンを切る
-├── library.json                 PlatformIO ライブラリ manifest (deps: ArduinoJson)
-├── src/                         C++: Batch/WireFormat, Uploader/HmacSha256, TimeSync
+batch-uplink/                        ← 共通ライブラリ。git tag でバージョンを切る (v1.0.0)
+├── library.json                 PlatformIO ライブラリ manifest (**依存ゼロ**)
+├── src/                         C++: Batch, Uploader/HmacSha256, TimeSync
+├── test/                        ホストの g++ で回る単体テスト
 ├── pyproject.toml               pip インストール可能にする
 └── batch_uplink/                Python: auth, devices, notify, s3util (パッケージ名は _ 区切り)
                                  ※ 全て stdlib + boto3 のみ。numpy 不要
 
 NamazuHaUrokoGaNai/              ← 既存。地震計。batch-uplink v1.0.0 に pin
-├── firmware/  lib/Display, lib/Shindo, lib/Iis3dhhc, lib/AccelSensor  ← 地震計専用
-├── lambda/    wire, store, detect_core, quicklook, events            ← 地震計専用
+├── firmware/  lib/Display, lib/Shindo, lib/Iis3dhhc, lib/Adxl355,
+│              lib/AccelSensor, lib/NamzWire (NAMZ v1 のヘッダ)  ← 地震計専用
+├── lambda/    wire, store, detect_core, quicklook, events      ← 地震計専用
 ├── tools/jismo/
 └── terraform/                   ← 既存スタック。触らない
 
-Electabuzz/                        ← 新規。周波数モニタ。batch-uplink v1.1.0 に pin
+Electabuzz/                        ← 新規。周波数モニタ。batch-uplink v1.0.0 に pin
 ├── firmware/  lib/GridFreq (Goertzel + PPS規正), src/main.cpp
 ├── lambda/    wire_gridfreq, ingest, detect, rollup, api
 ├── tools/gridfreq/              参照実装 + backtest
@@ -142,9 +192,7 @@ Electabuzz/                        ← 新規。周波数モニタ。batch-uplin
 **地震計のソースが動く**ので再ビルド・再検証の対象になってしまう。
 
 **タグで pin する独立レポならこれが消える。** 地震計は v1.0.0 に留まり続け、
-Electabuzz のために共通コードを変えてもソースレベルで一切影響しない。
-特に **`Batch` の一般化リスクが丸ごと消滅する**(v1.1.0 でやればよく、地震計を
-焼き直す必要すらない)。
+**この先** Electabuzz のために共通コードを変えてもソースレベルで一切影響しない。
 
 #### 切り出せる面は最初から綺麗に切れている (実測)
 
@@ -155,25 +203,42 @@ Electabuzz のために共通コードを変えてもソースレベルで一切
 | `auth.py` | なし | 不要 | **切り出す** |
 | `devices.py` | なし | 不要 | **切り出す** |
 | `notify.py` | なし | 不要 | **切り出す** |
-| `s3util.py` | なし | 不要 | **切り出す**(prefix を引数化) |
+| `s3util.py` | なし | 不要 | **切り出す**(prefix は**あえて**引数化していない。下記) |
 | `events.py` | なし | 不要 | **切り出さない。** `max_intensity`/`peak_gal`/`confirmed_intensity` で地震に染まっている |
 | `wire.py` / `store.py` / `detect_core.py` / `quicklook.py` | あり | **要** | 切り出さない |
 
 **切り出す4つは相互 import ゼロ・stdlib + boto3 のみ。** numpy に依存しないので
-platform wheel の問題が発生せず、pip 配布が極めて単純になる。
+platform wheel の問題が発生せず、pip 配布が極めて単純になる。この実測は正しく、
+**4つとも一文字も変えずに移せた**。ただし「純汎用」ではない点が2つ残っている。
+
+**あえて汎用化しなかった点が2つある。**
+
+- **env の接頭辞は `NAMZ_` のまま**(`NAMZ_DEVICES_TABLE` / `NAMZ_HMAC_SECRET_<id>` /
+  `NAMZ_SLACK_WEBHOOK_URL` / `NAMZ_DASHBOARD_URL` …)。**改名すると稼働中の地震計が壊れる。**
+  Electabuzz は `NAMZ_DEVICES_TABLE=electabuzz-devices` のように**自分のスタックの値を
+  同じ名前で渡す**。名前の綺麗さと引き換えに実機を止める価値は無い
+- **`s3util` の prefix は引数化していない。** `RAW_PREFIX = "raw"` / `EVENTS_PREFIX = "events"` は
+  モジュール定数のままだ。どちらも Electabuzz でそのまま使える名前で、**こちらの仕様が未凍結の
+  今に knob を足すのは「存在しない要件への一般化」になる。** 別 prefix(ロールアップの
+  `series/` 等)が要ると確定したら v1.1.0 で足せばよい。そのとき `raw_key` と
+  `raw_hour_prefixes` は**同じ prefix を使わないと列挙が壊れる**ので、別々の任意引数にせず
+  一括で渡すこと。→ [open-questions.md](open-questions.md)
 
 C++ 側も同様に切り分ける。
 
 | 対象 | 判定 |
 |---|---|
 `lib/Uploader/`(+`HmacSha256.h`) | **切り出す。** 完全にフォーマット非依存 |
-`lib/Batch/`(+`WireFormat.h`) | **切り出す。** レコード長可変化はここで行う |
+`lib/Batch/`(+`WireFormat.h`) | **`Batch` だけ切り出す。** レコード長可変化はここで行う |
 `lib/TimeSync/` | **切り出す。** NTP は汎用 |
 `lib/Display/` | **切り出さない。** `ClassFont.h` が580行の震度クラス字形で、TFT_eSPI にも依存する |
-`lib/Shindo/` `lib/Iis3dhhc/` `lib/AccelSensor/` | 地震計専用 |
+`lib/Shindo/` `lib/Iis3dhhc/` `lib/Adxl355/` `lib/AccelSensor/` | 地震計専用 |
+`lib/NamzWire/`(+`WireFormat.h`) | **切り出さない。** `NAMZ` v1 のヘッダを組む薄い層。Electabuzz は同じ位置に `lib/GridFreq` の相当物を持つ |
 
-> **訂正**: 本設計書の初期版は `lib/Display` を共有対象に挙げていたが、実物を見たら
-> 震度クラス専用の字形テーブルだった。**過剰に切り出すな**というのが教訓だ。
+**`WireFormat.h` は `batch-uplink` に入れない。** `Batch` からワイヤ形式の知識を抜いた以上、
+ヘッダ定義の行き場は各プロジェクト側だ(Namazu では `lib/NamzWire`)。
+**「名前が汎用的」と「中身が汎用的」は別物なので、過剰に切り出すな** —
+`lib/Display` を一度は共有対象に数えかけた教訓だ。
 
 #### 参照の機構
 
@@ -187,8 +252,9 @@ lib_deps =
     https://github.com/nna774/batch-uplink.git#v1.0.0    ; ← タグで pin
 ```
 
-共有レポ側に `library.json` を置き、`ArduinoJson` への依存を宣言する
-(`Uploader` がアラートJSONの生成に使っている)。
+共有レポ側に `library.json` を置く。**依存は宣言しない — v1.0.0 は C++ 側も Python 側も
+依存ゼロだ**(アラートJSONの生成は `snprintf` で、それも `sendAlert` の一般化で呼び出し側へ移った)。
+Python が numpy 非依存であることは、下記の pip 2回分割が成立する前提でもある。
 
 **Python (Lambda)** — [build_lambda.sh:29-33](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/build_lambda.sh#L29-L33)
 が既に `pip install --target "$stage"` でzipへ同梱している。ここに1行足すだけ。
@@ -231,21 +297,32 @@ submodule の SHA は版として読めない。
 - watchdog Lambda・EventBridge ルール・Function URL・ダッシュボードは
   [lambda.tf](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/lambda.tf) の形をそのまま複製する
 
-### 切り出しの順序 (絶対に守ること)
+### 切り出しの順序 (2026-08-03 に完了)
 
-**バイト等価な移動と、意味の変更を、同じ手順で混ぜてはならない。**
+**バイト等価な移動と、意味の変更を、同じ手順で混ぜてはならない。** これが不変条件だ。
+実機で異常が出たときに、移動のせいか一般化のせいか切り分けられなくなる。
 
-1. **共有レポを作り、対象を「一文字も変えずに」移す。** `Batch` の一般化はまだしない
-2. NamazuHaUrokoGaNai を `lib_deps` / `requirements.txt` で **v1.0.0 に pin** する
-3. `pytest lambda/tests` `pytest tools/tests` が緑、**かつ実機を焼き直してバッチが
-   従来通り着弾する**ことを確認する。ここが切り出しの唯一の検証点
-4. 動いたら **v1.0.0 をタグで固定。地震計はもうここから動かさない**
-5. **その後で**共有レポ側に `Batch` のレコード長可変化を入れ、**v1.1.0** を切る
-6. Electabuzz は v1.1.0 を参照する。地震計は v1.0.0 のまま**一切触らない**
+1. **Namazu の中で先に一般化する。** `Batch` のレコード長可変化・`sendAlert` の地震汚染剥がしを
+   **pytest / backtest / 実機2台が揃っている場所で**やり、動くところまで持っていく
+2. **出来上がったものを「一文字も変えずに」共有レポへ移す**
+3. `pytest` が緑、**かつ実機を焼き直してバッチが従来通り着弾する**ことを確認する
+4. **v1.0.0 をタグで固定。** Namazu は `platformio.ini` / `build_lambda.sh` でここに pin する
+5. **Electabuzz も同じ v1.0.0 を指す**
 
-この順序を守れば、`Batch` 一般化が地震計を壊す可能性は**存在しなくなる**。
-逆に順序を崩して「移動と一般化を同時にやる」と、実機で異常が出たときに
-移動のせいか一般化のせいか切り分けられなくなる。
+**逆順(先に移してから新レポで一般化し v1.1.0 を切る)は採らない。**
+一見もっともらしく、「地震計を触りたくない」という動機から自然に出てくる順序だが、劣る。
+
+| | 先に移す | **先に一般化する(採用)** |
+|---|---|---|
+| 一般化を検証する場所 | 新レポ。**テストも実機も無い** | Namazu。pytest も backtest も実機2台もある |
+| 移動を検証する場所 | 動いたことの無いコード | **既に動作確認済み**のコードを動かすだけ |
+| バージョン | v1.0.0 と v1.1.0 の2本 | **v1.0.0 の1本** |
+
+**検証は環境が揃っている側でやれ。** 「地震計を触らない」は目的ではなく、
+**壊さない**ための手段にすぎない。焼き直して確認できるなら触ってよい。
+
+**だから v1.1.0 は存在しない。** 両プロジェクトが同じ v1.0.0 を指す。
+次に共有レポへ手を入れるとき、初めて v1.1.0 を切る。
 
 ### タグで pin しろ。ブランチ追従にするな
 
@@ -268,11 +345,12 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
 
 **3レポジトリ + 2スタック。** 前掲のディレクトリ構成を参照。要点だけ再掲する。
 
-- **`batch-uplink`**: C++ は `Batch`/`WireFormat`・`Uploader`/`HmacSha256`・`TimeSync`。
+- **`batch-uplink`**: C++ は `Batch`・`Uploader`/`HmacSha256`・`TimeSync`。
   Python は `auth`・`devices`・`notify`・`s3util`。**これ以上は入れるな。**
   ドメインが混ざった瞬間に共有ライブラリとしての価値が消える
+  (`WireFormat.h` が入っていないのはこの原則どおりの帰結だ)
 - **`NamazuHaUrokoGaNai`**: `batch-uplink` v1.0.0 に pin。以後この pin を動かさない
-- **`Electabuzz`**: `batch-uplink` v1.1.0 に pin。`lib/GridFreq/`(Goertzel + PPS規正)、
+- **`Electabuzz`**: `batch-uplink` **v1.0.0** に pin。`lib/GridFreq/`(Goertzel + PPS規正)、
   `wire_gridfreq`、`tools/gridfreq/`(参照実装 + backtest)、独立 Terraform state
 - **ワイヤ形式は `batch-uplink` に入れない。** `Batch` がレイアウト非依存になるので、
   ヘッダ定義・magic・`SensorType` 相当の enum はすべてプロジェクト固有になる。

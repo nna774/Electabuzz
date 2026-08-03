@@ -67,16 +67,15 @@
    **ここが成否を決める。最初に潰せ。** 駄目なら方式B。
 3. **Goertzel 位相推定** — `tools/gridfreq/` に Python 参照実装 → C++ 移植 →
    `tools/backtest_gridfreq.py` で照合。既存 jismo と同じ流れ。
-4. **`batch-uplink` を切り出して v1.0.0 を打つ** — **一文字も変えずに移す**。
-   `Batch`/`WireFormat`・`Uploader`/`HmacSha256`・`TimeSync`(C++)、
-   `auth`・`devices`・`notify`・`s3util`(Python)。NamazuHaUrokoGaNai を
-   `lib_deps ...#v1.0.0` / `requirements.txt @v1.0.0` で pin。
-   **`pytest` 緑 + `[env:esp32dev]` 実機焼き直しで着弾確認 → v1.0.0 タグ確定。**
-   ここまでハードウェアは要らないので、**フェーズ1〜3と並行して進められる**
-5. **`batch-uplink` v1.1.0: `Batch` をレイアウト非依存にする** — レコード長を引数化、
-   `addRecord()` / `headerPtr()` を追加、`bytes()` から書き戻しを廃止、
-   死んだ `fromBytes` を削除。Electabuzz 側で独自64バイトヘッダを `static_assert` で固定。
-   **地震計は v1.0.0 に据え置き、触らない**
+4. ~~**`batch-uplink` を切り出して v1.0.0 を打つ**~~ **完了(2026-08-03)** —
+   `Batch`(レイアウト非依存化済み)・`Uploader`/`HmacSha256`・`TimeSync`(C++)、
+   `auth`・`devices`・`notify`・`s3util`(Python)。**一般化を Namazu の中で先に済ませてから
+   移した**ので v1.1.0 は無く、**両プロジェクトが v1.0.0 を指す**。
+   → [batch-uplink.md](batch-uplink.md)
+5. **`GFRQ` ヘッダを `Batch` に載せる** — `Batch(30, 12, 64, 0)` に64バイトヘッダを書き、
+   `records()`/`recordsSize()` から `crc32` を埋める薄い層。
+   ヘッダは `static_assert` で寸法を固定する。**ハードウェア不要でホストの g++ でテストできる**ので、
+   **フェーズ1〜3と並行して進められる**
 6. **送信** — `Uploader` に無改造で通す。
    **回線を意図的に数時間切り、復帰後に `series/` に穴がないことを S3 側で確認**
 7. **`Electabuzz/terraform/` を新規に立てる** — 新バケット・新テーブル・ingest・detect・

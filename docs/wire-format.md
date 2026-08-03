@@ -62,6 +62,28 @@
 1バッチ = 64 + 30×12 = **424 バイト**(当初案と同サイズだが、無駄なフィールドがない)。
 既存の 100Hz×3軸バッチ(18KB)の 1/43。`kMaxRamBatches = 6` でも RAM 消費は無視できる。
 
+## tail は持たない
+
+`batch-uplink` の `Batch` はレコード列の後ろに**可変長の tail** を置ける
+(Namazu は TLV トレイラーをそこに載せている)。**`GFRQ` v1 は使わない。**
+
+```cpp
+Batch(/*capacityRecords=*/30, /*recordBytes=*/12, /*headerBytes=*/64, /*tailCapacity=*/0);
+```
+
+`header_len`(offset 6)の自己記述で**拡張路は既に確保してある**ので、使う当てのない尻尾を
+今から予約する理由が無い。要ると分かった時点で `tailCapacity` を増やせばよく、
+**`Batch` 側の変更は要らない**(v1.0.0 の契約のままで足りる)。
+
+## `Batch` への載せかた
+
+**ヘッダを書く時期は「30レコード積み終えた後・`Uploader` へ渡す前」。** その時点で
+`recordCount()` も `records()` も確定しているので、`record_count`(offset 20)も
+`crc32`(offset 60)もここで書ける。**`crc32` の対象は `records()` から `recordsSize()` バイト**。
+
+`Batch` は最後まで中身を知らない。書くのは `lib/GridFreq` 側の薄い層で、
+Namazu の `lib/NamzWire` と同じ役回りだ。→ [batch-uplink.md](batch-uplink.md)
+
 認証ヘッダ名は `X-Namz-*` のままでよい(HMAC の仕組みは共有ライブラリ側で、
 ヘッダ名は既存と同一。無理に改名する利得がない)。
 

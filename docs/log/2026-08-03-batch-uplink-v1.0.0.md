@@ -134,7 +134,11 @@ bool sendAlert(const char* json, size_t len);   // 本文は呼び出し側が�
 
 `NtpTimebase`（着手可能タスクB）とは独立に進む。
 
-## 未了
+## 未了 → **同日中に解消した**
+
+以下は本ログを書いた時点での未了。**同日、設計書側に反映して閉じた**
+（[batch-uplink.md](../batch-uplink.md) に訂正5件、[wire-format.md](../wire-format.md) に
+tail と `Batch` への載せかたを追記）。**以後は設計書本体が正**であり、ここは経緯として残す。
 
 - **[batch-uplink.md](../batch-uplink.md) 本体がまだ古い。** このログと食い違っている。
   規約では「両者が食い違ったら `docs/*.md` を正とする」ので、**直すまでは本体を信じるな**。
