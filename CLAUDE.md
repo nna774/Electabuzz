@@ -24,25 +24,29 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**ADC も GNSS も未入手で、MCU だけが手元にある。**
+要点だけ言うと、**ADC も GNSS も未入手で、MCU（ESP32-S3-WROOM-1 N16R8）だけが手元にある。**
 **`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
-契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。** 送信基盤
-（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
+契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
+**時間基準（`firmware/lib/Timebase/`）も揃い、フェーズ1.5 の soak がビルドを通っている。**
+送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
 **`Batch` の契約は確定している**。
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
+firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依存）
 .venv/bin/python -m pytest lambda/tests    # repo 直下の .venv（Namazu と同じ形）
+.venv/bin/pio run -d firmware              # ビルド（platformio も同じ .venv に入っている）
 ```
 
 ### 着手可能なタスク（並行して進められる）
 
-**A. `NtpTimebase` を ESP32-S3 単体で書く** — PCM1808 を待たない。**優先度はこちらが上。**
-時間基準の回帰は「単調増加するティック源を NTP 時刻に回帰する」だけなので、
-ティックが I2S のサンプル数か `esp_timer` の µs かを問わない。
-数日走らせれば手元の ESP32-S3 の水晶の実 ppm が取れ、リスク10 の片方が埋まる。
-詳細は [docs/timebase.md](docs/timebase.md)。
-**着手には母艦を挿すこと・基板の型番・`.venv` への platformio 導入が要る。**
+**A. 母艦を挿してフェーズ1.5 の soak を走らせる** — **優先度はこちらが上。**
+コードは在ってビルドも通っているので、`firmware/src/secrets.h`（gitignore 対象。
+雛形は `secrets.h.example`）に SSID/パスを入れて
+`.venv/bin/pio run -d firmware -t upload` するだけ。数日走らせれば手元の水晶の
+実 ppm と温度相関が取れる。詳細は [docs/timebase.md](docs/timebase.md)。
+**この soak が測るのは ESP32 の 40MHz 水晶であって `fs` ではない**ことに注意しろ
+（リスク10 は片方しか埋まらない）。
 
 **B. `ingest` Lambda を書く** — ハードウェア不要。パースと検証はもう在るので、
 HMAC 検証（`batch-uplink` の `auth`）と S3 へ置く経路だけ。詳細は
@@ -60,6 +64,9 @@ A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ�
   最初から `TimebaseEstimator` 越しに「測って報告する量」として持て
 - **I2S は最初からステレオで初期化しろ。** GNSS 未入手で R ch が未接続でも同じ。
   **ここだけが後戻りできない**
+- **`GPIO 33〜37` を使うな。** 手元の N16R8 モジュールでは内部で octal PSRAM に
+  配線されている。**PSRAM を有効化しているかどうかとは無関係**で、ピンヘッダには
+  出ているので何事もなく刺さる（→ [docs/hardware.md](docs/hardware.md)）
 - **累積位相は絶対値で持て。** 差分保存だと欠測のたびに積分が壊れて復元できない
   （→ [docs/storage.md](docs/storage.md)）
 - **`batch-uplink` はタグで pin しろ。ブランチ追従にするな。**
@@ -87,7 +94,7 @@ A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ�
 
 | 知りたいこと | ファイル |
 |---|---|
-| サンプルレート誤差が何を壊すか / GNSS 1PPS を同一ADCで測る方式 / 時間基準のプラグイン化 / うるう秒 | [docs/timebase.md](docs/timebase.md) |
+| サンプルレート誤差が何を壊すか / GNSS 1PPS を同一ADCで測る方式 / 時間基準のプラグイン化と実装の契約（`residual_ns` の定義・標本の捨てかた） / うるう秒 | [docs/timebase.md](docs/timebase.md) |
 | トランス式ACアダプタの選定と実測 / AFE / 測定器の信頼度 / 電源 / 母艦選定 | [docs/hardware.md](docs/hardware.md) |
 | GNSS 受信機の選定と買う順序 / アンテナ / 別件の NTP サーバとの共用 | [docs/gnss.md](docs/gnss.md) |
 | 単一ビンDFT(Goertzel)を採る理由 / ゼロクロス検出を採らない理由 | [docs/signal-processing.md](docs/signal-processing.md) |
