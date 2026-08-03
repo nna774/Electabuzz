@@ -15,7 +15,7 @@
 | 4 | u8 | `version` | `1` |
 | 5 | u8 | `record_format` | `0` = `cycles_q16` レコード(12B) |
 | 6 | u16 | `header_len` | `64`。**自己記述にして将来の拡張を可能にする** |
-| 8 | u64 | `batch_start_us` | 先頭レコードの UNIX時刻[µs](UTC, NTP由来) |
+| 8 | u64 | `batch_start_us` | 先頭レコードの UNIX時刻 µs（UTC、NTP由来） |
 | 16 | u32 | `device_id` | |
 | 20 | u32 | `record_count` | 30秒バッチで `30` |
 | 24 | u32 | `record_rate_mhz` | **出力レコードレート** 1Hz = `1000` |
@@ -45,7 +45,7 @@
   明示すればパーサが「知らないフィールドは飛ばす」を実装でき、拡張が非破壊になる
 - **`record_rate_mhz` は出力レコードの周期であり、ADCのサンプルレートではない。**
   時刻導出は v1 と同じ式 `batch_start_us + i × 1e6/rate`
-  ([wire.py:37-40](../../NamazuHaUrokoGaNai/lambda/common/wire.py#L37-L40) の式を踏襲)。
+  ([wire.py:37-40](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L37-L40) の式を踏襲)。
   ADC レートは `fs_measured_uhz` に別途持つ
 
 ## ペイロード: 12バイト固定長レコード × N

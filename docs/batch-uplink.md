@@ -6,13 +6,13 @@
 
 | 対象 | 根拠 |
 |---|---|
-| [firmware/lib/Uploader/Uploader.h](../../NamazuHaUrokoGaNai/firmware/lib/Uploader/Uploader.h) | **完全にフォーマット非依存**。`Batch*` を受け取り `bytes()`/`size()` を POST するだけ。キュー・LittleFS退避・指数バックオフ・バックフィルの全機構が無改造で効く |
-| [firmware/lib/Uploader/HmacSha256.h](../../NamazuHaUrokoGaNai/firmware/lib/Uploader/HmacSha256.h) | 署名はボディのバイト列にしか依存しない |
-| [firmware/lib/TimeSync/](../../NamazuHaUrokoGaNai/firmware/lib/TimeSync/) | `batch_start_us` は UTC で要るので NTP は引き続き必要。PPS 規正とは役割が別 |
-| [firmware/lib/Display/](../../NamazuHaUrokoGaNai/firmware/lib/Display/) | **参考にするが共有しない。** `ClassFont.h` が震度クラス専用の字形テーブル。Electabuzz 側で作り直す |
-| [lambda/common/auth.py](../../NamazuHaUrokoGaNai/lambda/common/auth.py) | `verify(device_id, body, sig)` はボディ非依存。`NAMZ_HMAC_SECRET_<id>` で個体別鍵も既に対応済み |
-| [lambda/common/devices.py](../../NamazuHaUrokoGaNai/lambda/common/devices.py) + watchdog | `record_batch()` はセンサ種別に依存しない。死活監視が device_id 追加だけで効く |
-| [lambda/common/events.py](../../NamazuHaUrokoGaNai/lambda/common/events.py) / notify.py | `device_prompt`/`cloud_confirmed`/`checked`/`artificial` の状態機械をそのまま使う |
+| [firmware/lib/Uploader/Uploader.h](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Uploader/Uploader.h) | **完全にフォーマット非依存**。`Batch*` を受け取り `bytes()`/`size()` を POST するだけ。キュー・LittleFS退避・指数バックオフ・バックフィルの全機構が無改造で効く |
+| [firmware/lib/Uploader/HmacSha256.h](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Uploader/HmacSha256.h) | 署名はボディのバイト列にしか依存しない |
+| [firmware/lib/TimeSync/](https://github.com/nna774/NamazuHaUrokoGaNai/tree/master/firmware/lib/TimeSync/) | `batch_start_us` は UTC で要るので NTP は引き続き必要。PPS 規正とは役割が別 |
+| [firmware/lib/Display/](https://github.com/nna774/NamazuHaUrokoGaNai/tree/master/firmware/lib/Display/) | **参考にするが共有しない。** `ClassFont.h` が震度クラス専用の字形テーブル。Electabuzz 側で作り直す |
+| [lambda/common/auth.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/auth.py) | `verify(device_id, body, sig)` はボディ非依存。`NAMZ_HMAC_SECRET_<id>` で個体別鍵も既に対応済み |
+| [lambda/common/devices.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/devices.py) + watchdog | `record_batch()` はセンサ種別に依存しない。死活監視が device_id 追加だけで効く |
+| [lambda/common/events.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/events.py) / notify.py | `device_prompt`/`cloud_confirmed`/`checked`/`artificial` の状態機械をそのまま使う |
 
 ### 一般化が必要 (具体箇所)
 
@@ -20,12 +20,12 @@
 
 現状の `Batch` はワイヤ形式を2箇所で知っている。
 
-- レコード長が6バイト固定 — [Batch.h:42](../../NamazuHaUrokoGaNai/firmware/lib/Batch/Batch.h#L42)
-  `kSampleBytes = 3 * sizeof(int16_t)`、[Batch.h:25](../../NamazuHaUrokoGaNai/firmware/lib/Batch/Batch.h#L25)
+- レコード長が6バイト固定 — [Batch.h:42](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.h#L42)
+  `kSampleBytes = 3 * sizeof(int16_t)`、[Batch.h:25](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.h#L25)
   `addSample(int16_t x, int16_t y, int16_t z)`、
-  [Batch.cpp:24](../../NamazuHaUrokoGaNai/firmware/lib/Batch/Batch.cpp#L24) `h.axes = 3`
+  [Batch.cpp:24](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.cpp#L24) `h.axes = 3`
 - ヘッダを組み立て、**offset 20 に `sample_count` を書き戻す** —
-  [Batch.cpp:45](../../NamazuHaUrokoGaNai/firmware/lib/Batch/Batch.cpp#L45)
+  [Batch.cpp:45](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.cpp#L45)
 
 共有ライブラリに入れるなら、**ワイヤ形式の知識を `Batch` から完全に抜く**のが正しい。
 
@@ -45,16 +45,16 @@ bytes() / size()                                    ← 純粋な getter。書�
 > **訂正**: 本設計書の初期版は「`fromBytes()` が offset 8/20 を直読みするので v1 の32バイト
 > ヘッダを維持し後ろに拡張ヘッダを追記せよ」と書いていた。**これは誤りだった。**
 
-[Batch::fromBytes](../../NamazuHaUrokoGaNai/firmware/lib/Batch/Batch.cpp#L49-L65) は
+[Batch::fromBytes](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Batch/Batch.cpp#L49-L65) は
 **呼び出し元がゼロの死んだコード**である(`src`/`lib` 全体を grep して確認)。
 
 LittleFS 退避・復元の実際の経路はこうなっている。
 
-- 退避: [Uploader.cpp:142-147](../../NamazuHaUrokoGaNai/firmware/lib/Uploader/Uploader.cpp#L142-L147)
+- 退避: [Uploader.cpp:142-147](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Uploader/Uploader.cpp#L142-L147)
   — `b->bytes(), b->size()` を **`startUs` を20桁ゼロ埋めしたファイル名**で書く
-- 復元: [Uploader.cpp:58-64](../../NamazuHaUrokoGaNai/firmware/lib/Uploader/Uploader.cpp#L58-L64)
+- 復元: [Uploader.cpp:58-64](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Uploader/Uploader.cpp#L58-L64)
   — ファイルを生バイト列に読んで **`postBatch(body, len)` へ直接渡す。`Batch` を再構築しない**
-- 順序: [Uploader.cpp:168](../../NamazuHaUrokoGaNai/firmware/lib/Uploader/Uploader.cpp#L168)
+- 順序: [Uploader.cpp:168](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/Uploader/Uploader.cpp#L168)
   — `startUs` は**ファイル名から `strtoull`** で復元。ヘッダをパースしない
 
 **つまり退避・復元機構は既に完全にフォーマット非依存であり、ヘッダのレイアウトに
@@ -65,8 +65,8 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 
 **3. `wire.py` は触らない — 別実装にする**
 
-[wire.py:51](../../NamazuHaUrokoGaNai/lambda/common/wire.py#L51) で
-`if axes != 3: raise ValueError`、[wire.py:71](../../NamazuHaUrokoGaNai/lambda/common/wire.py#L71)
+[wire.py:51](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L51) で
+`if axes != 3: raise ValueError`、[wire.py:71](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L71)
 で `gal = raw * scale * MG_TO_GAL` を無条件に計算している。
 
 当初これを `sensor_type` で分岐させる案にしていたが、**AWSスタックを分ける方針(後述)に伴い、
@@ -75,7 +75,7 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 - 動いている地震計のパース経路に手を入れないので、**回帰リスクがゼロになる**
 - ヘッダのレイアウト(`HEADER_FMT = "<IBBBBQIIfI"`)は仕様として共有するが、
   コードは共有しない。32バイト固定の単純な構造なので二重実装の費用は小さい
-- [wire.py:37-40](../../NamazuHaUrokoGaNai/lambda/common/wire.py#L37-L40) の
+- [wire.py:37-40](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L37-L40) の
   `timestamps_us()`(= `batch_start_us + i/sample_rate_hz`)は**式として踏襲する**。
   だから `sample_rate_mhz` には出力レコードレートを入れる(v2 の設計参照)
 
@@ -83,16 +83,16 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 
 **4. S3キーの命名規約は「仕様として」踏襲する**
 
-[s3util.py:16-20](../../NamazuHaUrokoGaNai/lambda/common/s3util.py#L16-L20) の
+[s3util.py:16-20](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/s3util.py#L16-L20) の
 `{device:04d}-{batch_start_us:020d}.bin` という命名は、**20桁ゼロ埋めゆえに辞書順
-= 時系列順**になっており、[store.py:32](../../NamazuHaUrokoGaNai/lambda/common/store.py#L32)
-と [store.py:55](../../NamazuHaUrokoGaNai/lambda/common/store.py#L55) の `keys.sort()`
+= 時系列順**になっており、[store.py:32](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/store.py#L32)
+と [store.py:55](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/store.py#L55) の `keys.sort()`
 がそれに依存している。**この規約は Electabuzz 側でも必ず踏襲する**(コードは別実装でよい)。
 
 **5. 環境変数駆動なのでスタック分離が無償で効く (重要な発見)**
 
-[devices.py:30](../../NamazuHaUrokoGaNai/lambda/common/devices.py#L30) はテーブル名を
-`os.environ["NAMZ_DEVICES_TABLE"]` から取り、[notify.py:72-79](../../NamazuHaUrokoGaNai/lambda/common/notify.py#L72-L79)
+[devices.py:30](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/devices.py#L30) はテーブル名を
+`os.environ["NAMZ_DEVICES_TABLE"]` から取り、[notify.py:72-79](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/notify.py#L72-L79)
 `from_env()` も `NAMZ_NOTIFIER` / `NAMZ_SLACK_WEBHOOK_URL` / `NAMZ_SLACK_CHANNEL` /
 `NAMZ_DASHBOARD_URL` を全て env から読む。`auth.py` も `NAMZ_HMAC_SECRET_<id>`。
 
@@ -104,7 +104,7 @@ LittleFS 退避・復元の実際の経路はこうなっている。
 `lib/Shindo/`、`lib/Iis3dhhc/`、`lib/AccelSensor/`、`tools/jismo/`。
 
 特に **`AccelSensor` 抽象に周波数センサを載せてはいけない。**
-[AccelSensor.h](../../NamazuHaUrokoGaNai/firmware/lib/AccelSensor/AccelSensor.h)
+[AccelSensor.h](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/lib/AccelSensor/AccelSensor.h)
 は `read(AccelSample&)` で3軸LSBを返す契約で、`scaleMgPerLsb()` を持つ。
 周波数測定は「48kHzのDMAストリームから1Hzの累積位相を出す」処理であり、
 サンプル1個を返すインターフェイスに収まらない。別系統として作る。
@@ -177,7 +177,7 @@ C++ 側も同様に切り分ける。
 
 #### 参照の機構
 
-**C++ (PlatformIO)** — [platformio.ini:38-40](../../NamazuHaUrokoGaNai/firmware/platformio.ini#L38-L40)
+**C++ (PlatformIO)** — [platformio.ini:38-40](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/platformio.ini#L38-L40)
 が既に `lib_deps` を使っているので、git URL をタグ付きで足すだけ。
 
 ```ini
@@ -190,7 +190,7 @@ lib_deps =
 共有レポ側に `library.json` を置き、`ArduinoJson` への依存を宣言する
 (`Uploader` がアラートJSONの生成に使っている)。
 
-**Python (Lambda)** — [build_lambda.sh:29-33](../../NamazuHaUrokoGaNai/terraform/build_lambda.sh#L29-L33)
+**Python (Lambda)** — [build_lambda.sh:29-33](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/build_lambda.sh#L29-L33)
 が既に `pip install --target "$stage"` でzipへ同梱している。ここに1行足すだけ。
 
 ```bash
@@ -229,7 +229,7 @@ submodule の SHA は版として読めない。
 - **`devices.py` / `notify.py` / `auth.py` は env 駆動なので無改造で再利用できる**
   (前述の発見)。`NAMZ_DEVICES_TABLE=electabuzz-devices` を渡すだけ
 - watchdog Lambda・EventBridge ルール・Function URL・ダッシュボードは
-  [lambda.tf](../../NamazuHaUrokoGaNai/terraform/lambda.tf) の形をそのまま複製する
+  [lambda.tf](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/lambda.tf) の形をそのまま複製する
 
 ### 切り出しの順序 (絶対に守ること)
 
@@ -282,7 +282,7 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
 地震計のレポに電力の話が同居する不自然さが残ったが、共通部分を `batch-uplink` に抜けば
 NamazuHaUrokoGaNai は地震計のままでいられる。**これも独立レポ案の利点だ。**
 
-[design.md](../../NamazuHaUrokoGaNai/docs/design.md) の「デバイスマニフェストを単一の
+[design.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/design.md) の「デバイスマニフェストを単一の
 真実にする」構想(152-167行目)は、**スタックが2つになり HMAC 秘密の登録先も2つになるので
 より価値が上がる。** ただしマニフェスト自体は各プロジェクト固有(device_id の払い出しは
 プロジェクト単位)なので、**`batch-uplink` には入れない**。生成スクリプトの雛形を共有したく

@@ -3,14 +3,14 @@
 ## ingest
 
 既存 ingest を分岐させるのではなく、**Electabuzz 専用の ingest を別に置く**(スタック分離のため)。
-構造は [ingest/handler.py](../../NamazuHaUrokoGaNai/lambda/ingest/handler.py) をそのまま踏襲する。
+構造は [ingest/handler.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/ingest/handler.py) をそのまま踏襲する。
 
 - `auth.verify()` → `wire_gridfreq.parse()` → device_id 一致チェック → `s3.put_object()` →
   `devices.record_batch()` の流れは同一
-- device_id 一致チェック([handler.py:56-57](../../NamazuHaUrokoGaNai/lambda/ingest/handler.py#L56-L57))の
+- device_id 一致チェック([handler.py:56-57](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/ingest/handler.py#L56-L57))の
   「別デバイスの騙り防止」は必ず踏襲する
 - `devices.record_batch()` の失敗を握りつぶして 200 を返す判断
-  ([handler.py:67-68](../../NamazuHaUrokoGaNai/lambda/ingest/handler.py#L67-L68)、
+  ([handler.py:67-68](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/ingest/handler.py#L67-L68)、
   「デバイスに無駄な再送をさせない」)も踏襲する。**これは正しい判断だ**
 - `/alert` は JSON なので周波数用のフィールドに差し替えるだけ
 

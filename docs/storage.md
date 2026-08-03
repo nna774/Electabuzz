@@ -22,8 +22,8 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 
 さらに差分ではなく**絶対値**を持つことが効く。実コードに欠測経路があるからだ。
 
-> [main.cpp:113-119](../../NamazuHaUrokoGaNai/firmware/src/main.cpp#L113-L119) —
-> `gBatchQueue`(深さ4, [main.cpp:230](../../NamazuHaUrokoGaNai/firmware/src/main.cpp#L230))
+> [main.cpp:113-119](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/main.cpp#L113-L119) —
+> `gBatchQueue`(深さ4, [main.cpp:230](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/main.cpp#L230))
 > が満杯だと**最古のバッチを `delete` する**。Uploader の LittleFS 退避に到達する前に
 > 捨てられるので、「2xx まで捨てない」の不変条件はここをカバーしていない。
 
@@ -47,7 +47,7 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 
 ### retention: prefix を分けるだけで済む
 
-[s3.tf:14-28](../../NamazuHaUrokoGaNai/terraform/s3.tf#L14-L28) の lifecycle は
+[s3.tf:14-28](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/s3.tf#L14-L28) の lifecycle は
 `filter { prefix = "raw/" }` なので、**`series/` に置けば自動的に永久保存**になる。
 既存の「lifecycle は prefix 単位なので events/ へコピーで永久化」という解法と同じ発想。
 
@@ -59,7 +59,7 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 | `rollup/1m|1h|1d/...` | ダウンサンプル | 極小 | 永久 |
 
 1Hz × 12B = 12B/s。既存の 100Hz×3軸(600B/s)より **2桁軽い**。
-`kMaxSpillBatches = 20000` ([config.h:28](../../NamazuHaUrokoGaNai/firmware/src/config.h#L28),
+`kMaxSpillBatches = 20000` ([config.h:28](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/config.h#L28),
 「90日ぶんの上限目安」)は、周波数版のバッチが 424B なので**時間換算で桁違いに長く持つ**。
 
 生波形の常時保存は価値が低い。既存のイベント切り出し思想を踏襲し、
@@ -73,7 +73,7 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 周波数モニタは**1年連続グラフが本質的な要求**で、1Hz なら 3100万点。ブラウザが死ぬ。
 
 - EventBridge で日次起動する `rollup` Lambda を新設(watchdog と同じパターン:
-  [lambda.tf:85-102](../../NamazuHaUrokoGaNai/terraform/lambda.tf#L85-L102))
+  [lambda.tf:85-102](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/lambda.tf#L85-L102))
 - `rollup/1m/YYYY/MM/DD.bin`(1分値) → `rollup/1h/YYYY/MM.bin` → `rollup/1d/YYYY.bin`
 - **min/max を必ず保持する。** 平均だけだと逸脱イベントがグラフから消える
 - 累積位相は区間末の値を持てば、どの階層でも時刻偏差が正しく出る
@@ -84,7 +84,7 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 
 **配信経路: CloudFront OAC で `rollup/` だけ配る。**
 
-既存の data バケットは [s3.tf:6-12](../../NamazuHaUrokoGaNai/terraform/s3.tf#L6-L12) で
+既存の data バケットは [s3.tf:6-12](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/terraform/s3.tf#L6-L12) で
 public access を全ブロックしているので、既存スタックに相乗りするなら api Lambda を経由する
 しかなかった。**が、スタックを分離して新バケットを作るなら最初から OAC 前提で設計できる。**
 

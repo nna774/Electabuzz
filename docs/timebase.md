@@ -4,8 +4,8 @@
 
 既存は `sample_rate_mhz` を**公称値**として持ち、サンプル時刻を
 `batch_start_us + i × 1e6/rate` で導出する
-([wire.py:37-40](../../NamazuHaUrokoGaNai/lambda/common/wire.py#L37-L40),
-[design.md](../../NamazuHaUrokoGaNai/docs/design.md) 93行目)。
+([wire.py:37-40](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/wire.py#L37-L40),
+[design.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/design.md) 93行目)。
 加速度計としては完全に正しい。ESP32 の水晶が ±20ppm 狂って実サンプルレートが
 100.002Hz でも、計測震度は何も変わらない。
 
@@ -40,7 +40,7 @@
 
 だが採らない。理由は確度そのものではなく**検証可能性**だ。
 
-- [config.h:73](../../NamazuHaUrokoGaNai/firmware/src/config.h#L73) のコメントが
+- [config.h:73](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/config.h#L73) のコメントが
   正しく指摘している通り水晶ドリフトは ppm 級。それを NTP の slew で吸収する設計
   (`SNTP_SYNC_MODE_SMOOTH`)は、**システム時刻の進む速さ自体が制御対象**という意味であり、
   それをレート基準に使うのは筋が悪い。生の `esp_timer` カウンタと NTP オフセットを
@@ -194,14 +194,14 @@ RTT の大きい標本を捨てられるのが自前実装の利点になる。
 
 ## サンプリング機構は I2S DMA に置き換える
 
-既存は [main.cpp:243-247](../../NamazuHaUrokoGaNai/firmware/src/main.cpp#L243-L247)
+既存は [main.cpp:243-247](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/main.cpp#L243-L247)
 で `esp_timer` を 1kHz、`ESP_TIMER_TASK` dispatch で回し、
-[main.cpp:52-54](../../NamazuHaUrokoGaNai/firmware/src/main.cpp#L52-L54) の ISR から
+[main.cpp:52-54](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/main.cpp#L52-L54) の ISR から
 タスク通知している。ソフトタイマ dispatch なのでジッタがある。
 
 周波数版では **I2S DMA** にする。サンプルクロックがハードウェア由来になりジッタが
 消え、CPU は DMA バッファを掃くだけになる。
-[design.md](../../NamazuHaUrokoGaNai/docs/design.md) のオーバーサンプリング
+[design.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/design.md) のオーバーサンプリング
 (`kOversample=10` のボックスカー平均)による簡易アンチエイリアスも不要で、
 **アナログ LPF + 高いサンプルレート**という素直な形になる。
 
@@ -219,7 +219,7 @@ TE は `cycles/f_nom - (t - t0)` で計算する。この `t` を UTC で取る�
   バグなので先に潰しておく
 - これは後述の NTP サーバ側でも効く論点(leap smearing か step かの選択)
 
-なお [main.cpp:97](../../NamazuHaUrokoGaNai/firmware/src/main.cpp#L97) は
+なお [main.cpp:97](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/firmware/src/main.cpp#L97) は
 `if (!timesync::isSynced()) continue;` でサンプルを捨てているが、周波数版では
 **捨てずにフラグを立てて出す**方がよい。holdover 期間そのものが後から見たい情報だからだ。
 
