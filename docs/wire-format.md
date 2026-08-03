@@ -153,7 +153,7 @@ Namazu の `lib/NamzWire` と同じ役回りだ。→ [batch-uplink.md](batch-up
 以上、循環している)。仕様との一致は offset ごとの検証と Python 側との突き合わせが担い、
 **フィクスチャが担うのは「以後それが黙って変わらないこと」だ。** 役割を混同するな。
 
-## パーサ側 (`wire_gridfreq.py`)
+## パーサ側 (`lambda/wire_gridfreq.py`)
 
 ヘッダは Python の `struct` で1行になる(**パディングが入らないことを確認済み**)。
 
@@ -161,6 +161,27 @@ Namazu の `lib/NamzWire` と同じ役回りだ。→ [batch-uplink.md](batch-up
 HEADER_FMT = "<IBBHQIIIIIQIIHBbII"   # calcsize == 64
 RECORD_FMT = "<QHH"                  # calcsize == 12
 ```
+
+**依存は stdlib だけ。** 1バッチ30レコードに numpy を持ち出す理由が無く、持ち込まなければ
+ingest Lambda の zip に platform wheel の面倒が入らない
+(Namazu 側は波形処理があるので numpy が要る。ここは事情が違う)。
+
+弾きかたの方針。**「読めない」と「壊れている」を別の型にする** — `WireFormatError` と
+`CrcMismatch`。形式違いは設定の事故、CRC 不一致は中身の事故で、後者だけ
+「隔離して次へ進む」が正しい対処になるからだ。
+
+- **`NAMZ` の magic を名指しで弾く。** 独自 magic にした目的そのもので、
+  `kIngestUrl` の誤設定を「意味不明なデータ」ではなく**設定ミスとして**報告する
+- **末尾に余りがあれば弾く。** v1 に tail は無いので、余りは連結・切り詰めの事故だ。
+  tail を使う版を作るなら `version` を上げる
+- **`header_len` を信じてレコード列の頭を決める。** ヘッダ末尾にフィールドが増えた版でも
+  このパーサは壊れない(自己記述にしてある意味がこれだ)
+- **未知の `timebase_source` を「規正済み」と名乗らせない。** 古いパーサが新しい源の
+  データを読んだとき True に倒れると、**設計の一線がパーサ側から破れる**
+
+`te_seconds()` が返すのは**バッチ内の相対 TE** だけにしてある。絶対 TE はセッションを
+跨いだ基準が要るし、バッチ内に閉じていれば**うるう秒の1秒ジャンプを踏まない**
+(時刻を `batch_start_us` からの式で作り、区間の途中で UTC を読み直さないため)。
 
 認証ヘッダ名は `X-Namz-*` のままでよい(HMAC の仕組みは共有ライブラリ側で、
 ヘッダ名は既存と同一。無理に改名する利得がない)。
