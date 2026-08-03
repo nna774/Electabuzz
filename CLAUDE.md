@@ -24,26 +24,28 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**設計フェーズでこのレポにはまだコードが無い。ADC も GNSS も未入手で、
-MCU だけが手元にある。** ただし送信基盤
-（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで、
-**`Batch` の契約は確定している**。それでも着手できるタスクが2本ある。
+要点だけ言うと、**ADC も GNSS も未入手で、MCU だけが手元にある。** コードは
+`firmware/lib/GridFreq/`（`GFRQ` ヘッダの組み立て）だけが在り、**ホストの g++ で
+テストが緑**。送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は
+切り出し済みで **`Batch` の契約は確定している**。ハードウェア待ちのタスクは無い。
+
+```sh
+firmware/lib/GridFreq/test/run.sh   # 実機も PlatformIO も要らない
+```
 
 ### 着手可能なタスク（並行して進められる）
 
-**A. `GFRQ` ヘッダの組み立てを書く** — ハードウェア不要。**優先度はこちらが上。**
-`Batch(30, 12, 64, 0)` に 64バイトヘッダを載せ、`records()`/`recordsSize()` から `crc32` を
-埋める薄い層（Namazu の `lib/NamzWire` と同じ役回り）。**ホストの g++ でテストできる**
-（`batch-uplink` の `test/run.sh` と同じ形）。詳細は
-[docs/wire-format.md](docs/wire-format.md) と [docs/batch-uplink.md](docs/batch-uplink.md)。
-
-**B. `NtpTimebase` を ESP32-S3 単体で書く** — PCM1808 を待たない。
+**A. `NtpTimebase` を ESP32-S3 単体で書く** — PCM1808 を待たない。**優先度はこちらが上。**
 時間基準の回帰は「単調増加するティック源を NTP 時刻に回帰する」だけなので、
 ティックが I2S のサンプル数か `esp_timer` の µs かを問わない。
 数日走らせれば手元の ESP32-S3 の水晶の実 ppm が取れ、リスク10 の片方が埋まる。
 詳細は [docs/timebase.md](docs/timebase.md)。
 
-B は数日の実測待ちが入るので、**先に B を仕掛けて走らせ、待ち時間に A を書く**のが最も詰まらない。
+**B. `wire_gridfreq.py`（パーサ）を書く** — ハードウェア不要。ワイヤ形式は firmware 側の
+実装で固まっており、Python の `struct` 書式も検証済み。詳細は
+[docs/wire-format.md](docs/wire-format.md)。
+
+A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ、待ち時間に B を書く**のが最も詰まらない。
 
 ## 3. 絶対に破ってはいけない不変条件
 
@@ -85,7 +87,7 @@ B は数日の実測待ちが入るので、**先に B を仕掛けて走らせ�
 | サンプルレート誤差が何を壊すか / GNSS 1PPS を同一ADCで測る方式 / 時間基準のプラグイン化 / うるう秒 | [docs/timebase.md](docs/timebase.md) |
 | トランス式ACアダプタの選定と実測 / AFE / 測定器の信頼度 / 電源 / 母艦選定 | [docs/hardware.md](docs/hardware.md) |
 | GNSS 受信機の選定と買う順序 / アンテナ / 別件の NTP サーバとの共用 | [docs/gnss.md](docs/gnss.md) |
-| Goertzel / ゼロクロス検出を採らない理由 | [docs/signal-processing.md](docs/signal-processing.md) |
+| 単一ビンDFT(Goertzel)を採る理由 / ゼロクロス検出を採らない理由 | [docs/signal-processing.md](docs/signal-processing.md) |
 | `GFRQ` v1 のヘッダとレコード定義 | [docs/wire-format.md](docs/wire-format.md) |
 | 累積位相を第一級データにする理由 / retention / ロールアップ | [docs/storage.md](docs/storage.md) |
 | ingest / detect / rollup | [docs/cloud.md](docs/cloud.md) |
@@ -102,7 +104,8 @@ B は数日の実測待ちが入るので、**先に B を仕掛けて走らせ�
 - **[NamazuHaUrokoGaNai](https://github.com/nna774/NamazuHaUrokoGaNai)**（`../NamazuHaUrokoGaNai`）—
   家庭用地震計。**実機稼働中。壊すな。**
   送信基盤の大半をここから流用する。`docs/*.md` の相対リンクはこのレポを指している
-- **`batch-uplink`**（未作成）— 両者が共有する送信基盤。`nna774` 配下に作る
+- **[batch-uplink](https://github.com/nna774/batch-uplink)** — 両者が共有する送信基盤。
+  **v1.0.0 が出ている。タグで pin しろ**（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
 
 ## 7. 書きぶりの約束
 
