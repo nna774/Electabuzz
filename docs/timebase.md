@@ -73,8 +73,7 @@ PCM1808 は DC 除去の HPF を持つので矩形波は微分されるが、**�
 ジッタは数十ns だが、サンプルクロックとキャプチャクロックという2つの時間軸を持つ
 ことになる。方式Aが駄目なときの逃げ道。
 
-> **訂正 (2026-08-03)**: 本設計書は当初「ESP32-S3 の GPTimer+ETM」を方式B の手段に
-> 挙げていたが、**ESP32-S3 に ETM(Event Task Matrix)は無い。**
+> **GPTimer+ETM は使えない。ESP32-S3 に ETM(Event Task Matrix)は無い。**
 > ESP-IDF の ETM ドキュメントは esp32c6 では存在するが **esp32s3 では 404** であり、
 > `components/soc/esp32s3/include/soc/soc_caps.h` に `SOC_ETM_SUPPORTED` の定義も無い。
 > **方式B の手段は MCPWM capture のみである。**
@@ -181,7 +180,7 @@ RTT の大きい標本を捨てられるのが自前実装の利点になる。
 - **ESP32 から MCLK を出す構成なら、fs は分数分周器で決まる。** 48kHz は 160MHz 系から
   割り切れないので、**公称 48000 と実際の設定値が数十ppm 食い違う。水晶とは無関係な誤差だ**
 
-> **訂正 (2026-08-03)**: 本設計書は当初ここに「APLL を使えばずっと近づく」と書いていたが、
+> **「APLL を使えば公称値にずっと近づく」という逃げ道は S3 には無い。**
 > **ESP32-S3 の I2S は APLL を持たない。** `components/soc/esp32s3/include/soc/soc_caps.h` に
 > `SOC_I2S_SUPPORTS_APLL` の定義が無い（**無印 ESP32 には `(1)` で存在する**）。
 > つまり **APLL があるのは無印 ESP32 の方**で、S3 では選べない。
