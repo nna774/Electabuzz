@@ -27,7 +27,9 @@
 要点だけ言うと、**ADC も GNSS も未入手で、MCU（ESP32-S3-WROOM-1 N16R8）だけが手元にある。**
 **`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
 契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
-**時間基準（`firmware/lib/Timebase/`）も揃い、フェーズ1.5 の soak がビルドを通っている。**
+**フェーズ1.5 の soak（`firmware/lib/Timebase/`）は母艦で走行中**で、数日後に
+手元の水晶の実 ppm が出る。**`ingest` Lambda（`lambda/ingest/`）も書けている**
+（`/alert` と `terraform/` は未着手）。
 送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
 **`Batch` の契約は確定している**。
 
@@ -38,21 +40,21 @@ firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依�
 .venv/bin/pio run -d firmware              # ビルド（platformio も同じ .venv に入っている）
 ```
 
-### 着手可能なタスク（並行して進められる）
+### 着手可能なタスク
 
-**A. 母艦を挿してフェーズ1.5 の soak を走らせる** — **優先度はこちらが上。**
-コードは在ってビルドも通っているので、`firmware/src/secrets.h`（gitignore 対象。
-雛形は `secrets.h.example`）に SSID/パスを入れて
-`.venv/bin/pio run -d firmware -t upload` するだけ。数日走らせれば手元の水晶の
-実 ppm と温度相関が取れる。詳細は [docs/timebase.md](docs/timebase.md)。
-**この soak が測るのは ESP32 の 40MHz 水晶であって `fs` ではない**ことに注意しろ
+**soak が数日走るのを待っている状態だ。** 生ログは `soak/`（gitignore 対象）、
+捕捉は `tools/soak_capture.py <port> <path>`。
+**接続すると基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直すな
+（区間ごとに ppm は出るので致命傷ではないが、ただの損だ）。
+
+数日後に **soak の結果を読む**のが次の一手。区間ごとの ppm と温度の相関を出し、
+`residual_ns` が 1ppm 級に収まっているかを見る。**この soak が測るのは
+ESP32 の 40MHz 水晶であって `fs` ではない**ことに注意しろ
 （リスク10 は片方しか埋まらない）。
 
-**B. `ingest` Lambda を書く** — ハードウェア不要。パースと検証はもう在るので、
-HMAC 検証（`batch-uplink` の `auth`）と S3 へ置く経路だけ。詳細は
-[docs/cloud.md](docs/cloud.md) と [docs/storage.md](docs/storage.md)。
-
-A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ、待ち時間に B を書く**のが最も詰まらない。
+待てないなら `terraform/` を書く手はあるが、**急ぐ理由は無い。**
+デバイス側の送信経路がまだ無く（`main.cpp` は soak 専用）、
+フェーズ2（PPS 同時サンプリング）が成否の分岐点である以上、そちらが通ってからでよい。
 
 ## 3. 絶対に破ってはいけない不変条件
 
@@ -100,7 +102,7 @@ A は数日の実測待ちが入るので、**先に A を仕掛けて走らせ�
 | 単一ビンDFT(Goertzel)を採る理由 / ゼロクロス検出を採らない理由 | [docs/signal-processing.md](docs/signal-processing.md) |
 | `GFRQ` v1 のヘッダとレコード定義 | [docs/wire-format.md](docs/wire-format.md) |
 | 累積位相を第一級データにする理由 / retention / ロールアップ | [docs/storage.md](docs/storage.md) |
-| ingest / detect / rollup | [docs/cloud.md](docs/cloud.md) |
+| ingest の実装の契約（応答コードと置き先・CRC不一致の隔離・環境変数） / detect / rollup | [docs/cloud.md](docs/cloud.md) |
 | 共通ライブラリの切り出し / 流用境界の実測 / タグ pin / レポジトリ配置 | [docs/batch-uplink.md](docs/batch-uplink.md) |
 | 絶対確度をどう担保するか / 先行実装との外部照合 | [docs/verification.md](docs/verification.md) |
 | フェーズの順序 | [docs/roadmap.md](docs/roadmap.md) |

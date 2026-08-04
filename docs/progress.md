@@ -5,6 +5,8 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-04 | **`ingest` Lambda を書いた。** `lambda/ingest/handler.py` + `lambda/s3keys.py`、テスト37件が緑（AWS には触らない）。**置き先を `series/` にし `batch_uplink.s3util` は使わない**（あちらの `raw_key()` は `raw/` 固定で、Namazu の lifecycle が 90日 expire を掛けている。**永久保存のはずのデータが90日で消え、気づくのは3ヶ月後**になる。**prefix は保存方針そのものなので共有ライブラリの既定に寄りかからない**）。これに伴い「s3util の prefix を v1.1.0 で引数化する」を**覆した**。**CRC 不一致は隔離して 200**（400 だと同じ壊れたバッチが送られ続けて uplink が詰まる。捨てると証拠が消える。隔離キーは `batch_start_us` を使わず受信時刻と本文ハッシュで組む）。**生存台帳はテーブル未設定なら書かない**。**`/alert` と `terraform/` は意図的に書いていない** | [log/2026-08-04-ingest-lambda.md](log/2026-08-04-ingest-lambda.md) |
+| 2026-08-04 | **フェーズ1.5 の soak が実機で走り出した。** 焼いて接続まで到達し、`flash=16MB` が返って **`platformio.ini` の 16MB 上書きが実機で効いていることを裏取り**した。**新発見: pyserial は既定で DTR/RTS を立ててポートを開く**ので、素直に開くと ESP32 の自動リセット回路が基板を握って一文字も出ない（実際に踏んだ）。`tools/soak_capture.py` に閉じ込めた。**macOS では open のたびに基板がリセットされるのを避けられない**ので、接続のたびに回帰は積み直しになる（区間ごとに ppm は出るので致命傷ではない）。手元の個体のシリアルは CH343 の **UART ブリッジ側**で `s3-usbcdc` は不要だった | [log/2026-08-04-soak-running.md](log/2026-08-04-soak-running.md) |
 | 2026-08-04 | **母艦の現物が ESP32-S3-WROOM-1 N16R8 に確定し、`NtpTimebase` を書いた。** `firmware/platformio.ini` + `firmware/lib/Timebase/`（回帰は Arduino 非依存でホストの g++ テストが緑）+ フェーズ1.5 の soak スケッチ。**`residual_ns` の意味を「回帰の傾きの 1σ を ns/s に直したもの」に確定**（経路ノイズそのものではない。ダッシュボードの不確かさ帯と整合する定義はこれしかない）。**不変条件をインタフェースの実装で守る**: 観測が 8点/600秒に満たないうちは `source()` が `kNominal` を返し `fsMicroHz()` は公称値を返す（フラグの正しさではなく、数値を出さないことで守る）。**新発見: N16R8 では GPIO 33〜37 が使えない**（PSRAM 有効化の有無と無関係にモジュール内部で octal PSRAM に配線済み。S3 を採った理由である MCLK ピンの自由度がそのぶん狭い）。**この soak が測るのは ESP32 の水晶であって `fs` ではない**ので、リスク10 は片方しか埋まらない | [log/2026-08-04-ntp-timebase.md](log/2026-08-04-ntp-timebase.md) |
 | 2026-08-03 | **`wire_gridfreq.py`（パーサ）を書いた。形式の契約が書き手と読み手の往復で閉じた。** `lambda/wire_gridfreq.py` + テスト20件が緑で、**ゴールデンフィクスチャを firmware と Lambda の両側から主張している**。**「読めない」(`WireFormatError`)と「壊れている」(`CrcMismatch`)を別の型にした**（後者だけ隔離して次へ進むのが正しい）。**`NAMZ` の magic は名指しで弾く**（設定ミスとして報告できて初めて fail-fast の値打ちが出る）。**未知の `timebase_source` を「規正済み」と名乗らせない**（保守的に外す）。依存は stdlib のみ。repo 直下に `.venv` を作った | [log/2026-08-03-wire-gridfreq-parser.md](log/2026-08-03-wire-gridfreq-parser.md) |
 | 2026-08-03 | **`GFRQ` ヘッダの組み立てを実装した。このレポ最初のコード。** `firmware/lib/GridFreq/`（`WireFormat.h` + `GridFreqWire.h/.cpp`）で、ホストの g++ で走るテストが緑。**`crc32` は `zlib.crc32` と同じ版に確定**（版の食い違いは目視で守れないので既知ベクタをテストに置いた）。**`fillHeader()` の引数から「`Batch` や形式から出る値」を全部外した**（二重に持てるものを持たせなければ食い違いようがない）。**既定値は何も主張しない側に倒す**（`f_nominal_mhz` の既定は 50000 ではなく 0 = 未判別）。Python の `struct` 書式でも読めることを確認済み。**穴が1つ出た: `v_rms_mv` は 100V を mV で持てない**（u16 は最大 65.5V） | [log/2026-08-03-gfrq-wire-layer.md](log/2026-08-03-gfrq-wire-layer.md) |
@@ -22,8 +24,9 @@
 | 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.0.0**（public・切り出し済み。`Batch` の契約が確定） |
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
 | 未入手 | PCM1808、GNSS 受信機 ×2、アクティブアンテナ、DMM（HIOKI 3244-60） |
-| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**（ADC も送信もまだ無い） |
-| 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest と platformio。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
+| 稼働中 | **フェーズ1.5 の soak が母艦上で走っている**（2026-08-04〜）。生ログは `soak/`（gitignore 対象）。捕捉は `tools/soak_capture.py <port> <path>`。**繋ぎ直すと基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直さないこと |
+| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**（ADC も送信もまだ無い）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
+| 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.0.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
 
 ### 着手可能なタスク
 
@@ -34,17 +37,14 @@
 - ~~**`GFRQ` ヘッダの組み立てを書く**~~ **済み**（2026-08-03。`firmware/lib/GridFreq/`。
   テストは `firmware/lib/GridFreq/test/run.sh`）
 - ~~**`NtpTimebase` を ESP32-S3 単体で書く**~~ **済み**（2026-08-04。`firmware/lib/Timebase/`）
-- **母艦を挿してフェーズ1.5 の soak を焼き、数日走らせる** — **最優先。**
-  ビルドは通っている。`firmware/src/secrets.h` に SSID/パスを入れて
-  `.venv/bin/pio run -d firmware -t upload` するだけ。
-  **数日の実測待ちが入るので、先に仕掛けて走らせるのが最も詰まらない。**
-  取れるのは手元の水晶の実 ppm と温度相関、および `residual_ns` の実際の値。
-  → [timebase.md](timebase.md)
+- ~~**母艦を挿してフェーズ1.5 の soak を焼き、数日走らせる**~~ **走行中**（2026-08-04〜）。
+  **数日待つ。** 取れるのは手元の水晶の実 ppm と温度相関、および `residual_ns` の
+  実際の値。→ [timebase.md](timebase.md)
 - ~~**`wire_gridfreq.py`（パーサ）を書く**~~ **済み**（2026-08-03。`lambda/wire_gridfreq.py`）
-- **`ingest` Lambda を書く** — ハードウェア不要。パースと検証は在るので、あとは
-  HMAC 検証（`batch-uplink` の `auth`）と S3 へ置く経路だけ。**キー命名
-  `{device:04d}-{batch_start_us:020d}.bin` は必ず踏襲する**（20桁ゼロ埋めゆえに
-  辞書順 = 時系列順）。→ [batch-uplink.md](batch-uplink.md) / [storage.md](storage.md)
+- ~~**`ingest` Lambda を書く**~~ **済み**（2026-08-04。`lambda/ingest/handler.py`）
+- **soak の結果を読む** — 数日後。区間ごとに ppm と温度の相関を出し、
+  `residual_ns` が設計の想定（1ppm 級）に収まっているか確かめる。
+  **ここで `NtpTimebase` の実力が確定する。**
 
 ### まだ触っていない領域
 
