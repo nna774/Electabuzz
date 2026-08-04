@@ -217,12 +217,15 @@ platform wheel の問題が発生せず、pip 配布が極めて単純になる�
   `NAMZ_SLACK_WEBHOOK_URL` / `NAMZ_DASHBOARD_URL` …)。**改名すると稼働中の地震計が壊れる。**
   Electabuzz は `NAMZ_DEVICES_TABLE=electabuzz-devices` のように**自分のスタックの値を
   同じ名前で渡す**。名前の綺麗さと引き換えに実機を止める価値は無い
-- **`s3util` の prefix は引数化していない。** `RAW_PREFIX = "raw"` / `EVENTS_PREFIX = "events"` は
-  モジュール定数のままだ。どちらも Electabuzz でそのまま使える名前で、**こちらの仕様が未凍結の
-  今に knob を足すのは「存在しない要件への一般化」になる。** 別 prefix(ロールアップの
-  `series/` 等)が要ると確定したら v1.1.0 で足せばよい。そのとき `raw_key` と
-  `raw_hour_prefixes` は**同じ prefix を使わないと列挙が壊れる**ので、別々の任意引数にせず
-  一括で渡すこと。→ [open-questions.md](open-questions.md)
+- **`s3util` の prefix は引数化しない。Electabuzz は `s3util` を使わない方を選ぶ。**
+  `RAW_PREFIX = "raw"` / `EVENTS_PREFIX = "events"` はモジュール定数のままにする。
+  当初は「別 prefix が要ると確定したら v1.1.0 で引数化する」と考えていたが、
+  **prefix は保存方針そのものであって、共有ライブラリの既定に寄りかかってよい種類の
+  値ではない**と分かった。Namazu 側の lifecycle は `raw/` に 90日の expire を掛けており、
+  永久保存が前提の累積位相をそこへ置くと**設計上永久のはずのデータが90日で消える**。
+  しかも気づくのは3ヶ月後だ。**呼び出し側で prefix を名指しさせる方が安全**なので、
+  Electabuzz は `lambda/s3keys.py` に自前で持つ(→ [cloud.md](cloud.md))。
+  キーの形は共有ライブラリと同一に揃えてあるので、揃える価値のある部分は失われていない
 
 C++ 側も同様に切り分ける。
 
