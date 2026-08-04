@@ -30,3 +30,6 @@ dist/
 
 # 秘密情報（WiFi・HMAC鍵）。雛形は firmware/src/secrets.h.example
 firmware/**/secrets.h
+
+# soak の生ログ（数日ぶんのCSV。結論はドキュメントへ書く）
+soak/
