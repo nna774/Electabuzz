@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-04 | **段階1の GNSS を NEO-M8N に確定し、1枚発注した**（1,629円、基板 `HW-542`、`PPS RXD TXD GND VCC`、IPEX + SMA、EEPROM 搭載）。**世代の選定を本体に書いた**: QZSS 対応（準天頂軌道 = 窓際で効くのは高仰角の衛星）・同時受信（狭い空で衛星数を稼ぐ唯一の方法）・M8T と同世代（段階3へ知見が繋がる）。**NEO-6M は QZSS 非対応で外し、M9N は設定方式が `VALSET`/`VALGET` に変わる上に M8T の代替にならない**（M8T の値打ちは 0D モード）。受信機の要件も書き直した（ジッタは要件でない代わりに **u-blox であること**が要件。UBX が無いとリスク5の逃げ道②が使えない）。**アンテナは未購入で、揃うまで段階1の判定は始められない**（測っているのは受信機ではなく空の見え方だ） | [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md) |
 | 2026-08-04 | **PCM1808 モジュール(缶発振器なし版)を発注した。** 缶発振器の有無は方式Aの正しさに影響せず(相殺)、GNSS 未着の今なら構成を変えても実測やり直しで済むため判定待ちをせず購入。**この構成は ESP32 が SCKI の master になる**(= S3 採用理由である MCLK ピン自由度をそのまま使う) | [log/2026-08-04-pcm1808-order.md](log/2026-08-04-pcm1808-order.md) |
 | 2026-08-04 | **`ingest` Lambda を書いた。** `lambda/ingest/handler.py` + `lambda/s3keys.py`、テスト37件が緑（AWS には触らない）。**置き先を `series/` にし `batch_uplink.s3util` は使わない**（あちらの `raw_key()` は `raw/` 固定で、Namazu の lifecycle が 90日 expire を掛けている。**永久保存のはずのデータが90日で消え、気づくのは3ヶ月後**になる。**prefix は保存方針そのものなので共有ライブラリの既定に寄りかからない**）。これに伴い「s3util の prefix を v1.1.0 で引数化する」を**覆した**。**CRC 不一致は隔離して 200**（400 だと同じ壊れたバッチが送られ続けて uplink が詰まる。捨てると証拠が消える。隔離キーは `batch_start_us` を使わず受信時刻と本文ハッシュで組む）。**生存台帳はテーブル未設定なら書かない**。**`/alert` と `terraform/` は意図的に書いていない** | [log/2026-08-04-ingest-lambda.md](log/2026-08-04-ingest-lambda.md) |
 | 2026-08-04 | **フェーズ1.5 の soak が実機で走り出した。** 焼いて接続まで到達し、`flash=16MB` が返って **`platformio.ini` の 16MB 上書きが実機で効いていることを裏取り**した。**新発見: pyserial は既定で DTR/RTS を立ててポートを開く**ので、素直に開くと ESP32 の自動リセット回路が基板を握って一文字も出ない（実際に踏んだ）。`tools/soak_capture.py` に閉じ込めた。**macOS では open のたびに基板がリセットされるのを避けられない**ので、接続のたびに回帰は積み直しになる（区間ごとに ppm は出るので致命傷ではない）。手元の個体のシリアルは CH343 の **UART ブリッジ側**で `s3-usbcdc` は不要だった | [log/2026-08-04-soak-running.md](log/2026-08-04-soak-running.md) |
@@ -24,7 +25,7 @@
 |---|---|
 | 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.0.0**（public・切り出し済み。`Batch` の契約が確定） |
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
-| 未入手 | PCM1808（**缶発振器なし版を発注済み**。→ [log/2026-08-04-pcm1808-order.md](log/2026-08-04-pcm1808-order.md)）、GNSS 受信機 ×2、アクティブアンテナ、DMM（HIOKI 3244-60） |
+| 未入手 | PCM1808（**缶発振器なし版を発注済み**。→ [log/2026-08-04-pcm1808-order.md](log/2026-08-04-pcm1808-order.md)）、GNSS 受信機（**NEO-M8N を1枚発注済み**。→ [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**2台目は段階1の判定が出てから決める**）、**アクティブアンテナ（未購入。GPS/GLONASS 両対応のものを買え）**、DMM（HIOKI 3244-60） |
 | 稼働中 | **フェーズ1.5 の soak が母艦上で走っている**（2026-08-04〜）。生ログは `soak/`（gitignore 対象）。捕捉は `tools/soak_capture.py <port> <path>`。**繋ぎ直すと基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直さないこと |
 | コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**（ADC も送信もまだ無い）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.0.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
@@ -46,6 +47,10 @@
 - **soak の結果を読む** — 数日後。区間ごとに ppm と温度の相関を出し、
   `residual_ns` が設計の想定（1ppm 級）に収まっているか確かめる。
   **ここで `NtpTimebase` の実力が確定する。**
+- **アクティブアンテナを買う** — **GNSS 受信機より優先度が高い。**
+  受信機は届くが、**アンテナが無いと段階1の判定を始められない**（測っているのは
+  受信機の性能ではなく空の見え方で、それを決めるのはアンテナと設置場所だ）。
+  **GPS/GLONASS 両対応** + SMA + 3〜5m ケーブル、2,000〜3,000円。→ [gnss.md](gnss.md)
 
 ### まだ触っていない領域
 
