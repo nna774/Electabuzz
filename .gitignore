@@ -33,3 +33,6 @@ firmware/**/secrets.h
 
 # soak の生ログ（数日ぶんのCSV。結論はドキュメントへ書く）
 soak/
+
+# worktree（別セッションが作る作業用クローン。レポには入れない）
+.claude/worktrees/
