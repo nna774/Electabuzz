@@ -24,7 +24,8 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**ADC も GNSS も未入手で、MCU（ESP32-S3-WROOM-1 N16R8）だけが手元にある。**
+要点だけ言うと、**GNSS は未入手。MCU（ESP32-S3-WROOM-1 N16R8）と PCM1808 が手元にある**
+（PCM1808 は**無改造で使え、配線とピン割り当ては [docs/hardware.md](docs/hardware.md) に確定済み**）。
 **`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
 契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
 **フェーズ1.5 の soak（`firmware/lib/Timebase/`）は母艦で走行中**で、
@@ -43,14 +44,19 @@ firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依�
 
 ### 着手可能なタスク
 
-**部品の到着待ちだ。** soak はまだ回しているが、
+**PCM1808 が届いたので手は動かせる。** soak はまだ回しているが、
 **主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md) で
 片付いている**（水晶の実 ppm・温度依存の不在・`residual_ns` の床）ので**急いで見るな**。
 生ログは `soak/`（gitignore 対象）、捕捉は `tools/soak_capture.py <port> <path>`。
 **接続すると基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直すな。
 読むだけなら `tail soak/soak-*.csv` で足りる。**ポートを開くな。**
 
-**手が空いているなら「アクティブアンテナを買う」が最優先**（→ [docs/progress.md](docs/progress.md)）。
+**次の一手は `fs` の実測だ。** PCM1808 の I2S を配線してサンプルを数え、
+`NtpTimebase` の時間軸に対する `fs` の ppm と安定度を出す。**AFE も GNSS も DMM も要らない。**
+**比較対象は soak で出た水晶の +3.8873 ppm** で、外れたら配線かクロック経路が想定と違う。
+**これでリスク10 の残り半分が埋まる。** 配線に手を付ける時点で soak の捕捉を落とせ。
+
+買い物では **アクティブアンテナが最優先**（→ [docs/progress.md](docs/progress.md)）。
 GNSS 受信機は発注済みだが、**アンテナが無いと段階1の判定を始められない。**
 
 `terraform/` を書く手もあるが、**急ぐ理由は無い。**
