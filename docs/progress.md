@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-05 | **soak の一昼夜が閉じ、水晶の実 ppm が出た: +3.8873 ± 0.0055 ppm**（29.4時間、668点）。±10ppm 仕様の部品として素直な個体。初期の +11.2 ppm を信じなかったのが正しく、**`fs` の隣に `residual_ns` を置いた設計の値打ちがそのまま出た**。**温度補正は実装しないと決めた**（`temp_c` が 42〜57℃ を往復して共線が解けた区間で温度係数は `-0.044 ± 0.030 ppm/℃` = 有意でない。最悪値でも床と同じ桁で得るものが無い）。**最大の発見は `residual_ns` に床があること**: 局所 ppm の χ²/dof = 1.65 で**1〜2時間スケールの傾きは 0.2 ppm 級でふらついており**、同時点の申告 0.005 ppm と40倍離れる。定義（回帰の傾きの 1σ）は変えないが、**誤差予算の全体ではなく下限である**旨を [timebase.md](timebase.md) に実測値つきで足した。**`NtpTimebase` を信じてよいのは 0.2 ppm 級まで**（= 50Hz で 10µHz、時刻偏差は長期バイアスが効くので 0.5ms/日未満。要求は大きく上回る）。これは**方式Aを採る理由の裏取り**でもある | [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md) |
 | 2026-08-04 | **段階1の GNSS を NEO-M8N に確定し、1枚発注した**（1,629円、基板 `HW-542`、`PPS RXD TXD GND VCC`、IPEX + SMA、EEPROM 搭載）。**世代の選定を本体に書いた**: QZSS 対応（準天頂軌道 = 窓際で効くのは高仰角の衛星）・同時受信（狭い空で衛星数を稼ぐ唯一の方法）・M8T と同世代（段階3へ知見が繋がる）。**NEO-6M は QZSS 非対応で外し、M9N は設定方式が `VALSET`/`VALGET` に変わる上に M8T の代替にならない**（M8T の値打ちは 0D モード）。受信機の要件も書き直した（ジッタは要件でない代わりに **u-blox であること**が要件。UBX が無いとリスク5の逃げ道②が使えない）。**アンテナは未購入で、揃うまで段階1の判定は始められない**（測っているのは受信機ではなく空の見え方だ） | [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md) |
 | 2026-08-04 | **PCM1808 モジュール(缶発振器なし版)を発注した。** 缶発振器の有無は方式Aの正しさに影響せず(相殺)、GNSS 未着の今なら構成を変えても実測やり直しで済むため判定待ちをせず購入。**この構成は ESP32 が SCKI の master になる**(= S3 採用理由である MCLK ピン自由度をそのまま使う) | [log/2026-08-04-pcm1808-order.md](log/2026-08-04-pcm1808-order.md) |
 | 2026-08-04 | **`ingest` Lambda を書いた。** `lambda/ingest/handler.py` + `lambda/s3keys.py`、テスト37件が緑（AWS には触らない）。**置き先を `series/` にし `batch_uplink.s3util` は使わない**（あちらの `raw_key()` は `raw/` 固定で、Namazu の lifecycle が 90日 expire を掛けている。**永久保存のはずのデータが90日で消え、気づくのは3ヶ月後**になる。**prefix は保存方針そのものなので共有ライブラリの既定に寄りかからない**）。これに伴い「s3util の prefix を v1.1.0 で引数化する」を**覆した**。**CRC 不一致は隔離して 200**（400 だと同じ壊れたバッチが送られ続けて uplink が詰まる。捨てると証拠が消える。隔離キーは `batch_start_us` を使わず受信時刻と本文ハッシュで組む）。**生存台帳はテーブル未設定なら書かない**。**`/alert` と `terraform/` は意図的に書いていない** | [log/2026-08-04-ingest-lambda.md](log/2026-08-04-ingest-lambda.md) |
@@ -26,7 +27,7 @@
 | 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.0.0**（public・切り出し済み。`Batch` の契約が確定） |
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
 | 未入手 | PCM1808（**缶発振器なし版を発注済み**。→ [log/2026-08-04-pcm1808-order.md](log/2026-08-04-pcm1808-order.md)）、GNSS 受信機（**NEO-M8N を1枚発注済み**。→ [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**2台目は段階1の判定が出てから決める**）、**アクティブアンテナ（未購入。GPS/GLONASS 両対応のものを買え）**、DMM（HIOKI 3244-60） |
-| 稼働中 | **フェーズ1.5 の soak が母艦上で走っている**（2026-08-04〜）。生ログは `soak/`（gitignore 対象）。捕捉は `tools/soak_capture.py <port> <path>`。**繋ぎ直すと基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直さないこと |
+| 稼働中 | **フェーズ1.5 の soak が母艦上で走っている**（2026-08-04〜）。生ログは `soak/`（gitignore 対象）。捕捉は `tools/soak_capture.py <port> <path>`。**繋ぎ直すと基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直さないこと。**一昼夜ぶんの読みは済んでいる**（→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）ので**急いで見る必要は無い** |
 | コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**（ADC も送信もまだ無い）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.0.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
 
@@ -39,14 +40,13 @@
 - ~~**`GFRQ` ヘッダの組み立てを書く**~~ **済み**（2026-08-03。`firmware/lib/GridFreq/`。
   テストは `firmware/lib/GridFreq/test/run.sh`）
 - ~~**`NtpTimebase` を ESP32-S3 単体で書く**~~ **済み**（2026-08-04。`firmware/lib/Timebase/`）
-- ~~**母艦を挿してフェーズ1.5 の soak を焼き、数日走らせる**~~ **走行中**（2026-08-04〜）。
-  **数日待つ。** 取れるのは手元の水晶の実 ppm と温度相関、および `residual_ns` の
-  実際の値。→ [timebase.md](timebase.md)
+- ~~**母艦を挿してフェーズ1.5 の soak を焼き、数日走らせる**~~ **走行中**（2026-08-04〜）
 - ~~**`wire_gridfreq.py`（パーサ）を書く**~~ **済み**（2026-08-03。`lambda/wire_gridfreq.py`）
 - ~~**`ingest` Lambda を書く**~~ **済み**（2026-08-04。`lambda/ingest/handler.py`）
-- **soak の結果を読む** — 数日後。区間ごとに ppm と温度の相関を出し、
-  `residual_ns` が設計の想定（1ppm 級）に収まっているか確かめる。
-  **ここで `NtpTimebase` の実力が確定する。**
+- ~~**soak の結果を読む**~~ **一昼夜ぶんは済み**（2026-08-05。水晶 +3.8873 ppm、
+  温度依存は有意でなく補正しない、`NtpTimebase` の実力は 0.2 ppm 級。
+  → [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。
+  **soak は止めていない**が、**主要な問いは片付いたので急ぎの用は無い**
 - **アクティブアンテナを買う** — **GNSS 受信機より優先度が高い。**
   受信機は届くが、**アンテナが無いと段階1の判定を始められない**（測っているのは
   受信機の性能ではなく空の見え方で、それを決めるのはアンテナと設置場所だ）。

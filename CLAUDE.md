@@ -27,8 +27,9 @@
 要点だけ言うと、**ADC も GNSS も未入手で、MCU（ESP32-S3-WROOM-1 N16R8）だけが手元にある。**
 **`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
 契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
-**フェーズ1.5 の soak（`firmware/lib/Timebase/`）は母艦で走行中**で、数日後に
-手元の水晶の実 ppm が出る。**`ingest` Lambda（`lambda/ingest/`）も書けている**
+**フェーズ1.5 の soak（`firmware/lib/Timebase/`）は母艦で走行中**で、
+**一昼夜ぶんの結果はもう出ている**（手元の水晶は **+3.8873 ppm**、温度補正は不要、
+`NtpTimebase` の実力は **0.2 ppm 級**）。**`ingest` Lambda（`lambda/ingest/`）も書けている**
 （`/alert` と `terraform/` は未着手）。
 送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
 **`Batch` の契約は確定している**。
@@ -42,17 +43,17 @@ firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依�
 
 ### 着手可能なタスク
 
-**soak が数日走るのを待っている状態だ。** 生ログは `soak/`（gitignore 対象）、
-捕捉は `tools/soak_capture.py <port> <path>`。
-**接続すると基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直すな
-（区間ごとに ppm は出るので致命傷ではないが、ただの損だ）。
+**部品の到着待ちだ。** soak はまだ回しているが、
+**主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md) で
+片付いている**（水晶の実 ppm・温度依存の不在・`residual_ns` の床）ので**急いで見るな**。
+生ログは `soak/`（gitignore 対象）、捕捉は `tools/soak_capture.py <port> <path>`。
+**接続すると基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直すな。
+読むだけなら `tail soak/soak-*.csv` で足りる。**ポートを開くな。**
 
-数日後に **soak の結果を読む**のが次の一手。区間ごとの ppm と温度の相関を出し、
-`residual_ns` が 1ppm 級に収まっているかを見る。**この soak が測るのは
-ESP32 の 40MHz 水晶であって `fs` ではない**ことに注意しろ
-（リスク10 は片方しか埋まらない）。
+**手が空いているなら「アクティブアンテナを買う」が最優先**（→ [docs/progress.md](docs/progress.md)）。
+GNSS 受信機は発注済みだが、**アンテナが無いと段階1の判定を始められない。**
 
-待てないなら `terraform/` を書く手はあるが、**急ぐ理由は無い。**
+`terraform/` を書く手もあるが、**急ぐ理由は無い。**
 デバイス側の送信経路がまだ無く（`main.cpp` は soak 専用）、
 フェーズ2（PPS 同時サンプリング）が成否の分岐点である以上、そちらが通ってからでよい。
 
