@@ -54,3 +54,11 @@ static constexpr size_t kNtpServerCount = sizeof(kNtpServers) / sizeof(kNtpServe
 // --- WiFi ---
 static constexpr uint32_t kWifiConnectTimeoutMs = 20000;
 static constexpr uint32_t kWifiRetryDelayMs = 5000;
+
+// --- NAMZ_GRIDFREQ_TEST（フェーズ1疎通確認。tools/capture_serial.py 用）---
+//
+// 48kHz の生サンプルはそのままではシリアル(115200baud)の帯域を超える。
+// boxcar平均で間引く（Namazuの地震計がオーバーサンプル平均で使っているのと同じ手法。
+// → docs/hardware.md）。48で割ると実効レート1000Hzで、50Hz確認には十分な上、
+// ナイキストの余裕もある。**この間引きはTE級の精度を主張しない、粗いチェック用**
+static constexpr uint32_t kGridFreqTestDecimate = 200;
