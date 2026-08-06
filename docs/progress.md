@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-07 | **AFEを実配線してfsを実測し、リスク10（fsを駆動しているのは水晶かモジュール搭載の缶発振器か）を解消した。** `gXtal`(水晶ppm)と`gFs`(fs実測ppm)は一致しないが、差分が8点にわたり31.7〜32.9ppmとほぼ一定——`timebase.md`が予告していた「48kHzは160MHz系PLLの分数分周器で作られ、水晶とは無関係な数十ppmのずれが乗る」という予測と定量的に一致し、**差分が一定であること自体がESP32のMCLKがSCKIを駆動している証拠**になった。トランス接続直後は`l_pp`/`r_pp`がフルスケールに張り付いたが、DMM実測(約0.6VAC)とは整合しており、C1(LPF)未実装のハイインピーダンスノードが広帯域ノイズを拾っていただけと判断（R1=100kΩの電流制限設計により破壊リスクは無い）。`ovf`は全区間0で配線・DMAとも健全 | [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md) |
 | 2026-08-06 | **実配線用の配線図を作った。** AFE（R1=100kΩ/R2=6.8kΩ）・電源（5V/3.3Vの2系統）・I2Sピン割り当てを1枚にまとめてArtifactとして公開。**図を描く過程でAC出力の戻り端子の扱いが抜けていると気づいた**——バレルジャックの2端子はどちらもAC（トランス二次巻線の両端）で、あらかじめGND電位に決まっている端子は無いのに、既存の図は信号側の1本しか描いていなかった。`hardware.md` に戻り端子を回路GNDへ直結する旨を明記した | [log/2026-08-06-afe-wiring-diagram.md](log/2026-08-06-afe-wiring-diagram.md) |
 | 2026-08-05 | **`main` の分岐マージで AFE 分圧抵抗の前提を突き合わせ、確定値を実測 VCC で検算した。** 並行セッションで一方は VCC 公称5V前提で R1=100kΩ/R2=6.8kΩ に確定し、もう一方は ESP32 の `5V` ピン実測が 4.84V だったことから分圧の目標を「フルスケールの60〜75%」というレンジに緩めていた。マージ時に確定済みの R1/R2 を実測 4.84V で検算すると、ワーストケース FS比は 72%→74.5%（ADC 負荷込みで 65%→67.4%）とやや天井に近づくが、いずれもクリップの余裕は残る。**両者は矛盾ではなく合成できた** | [log/2026-08-05-merge-afe-divider-reconciliation.md](log/2026-08-05-merge-afe-divider-reconciliation.md) |
 | 2026-08-05 | **`fs` を測るファームを書いた**（`firmware/src/main.cpp` を v2 に。ビルドは通ったが**実機未投入**）。**推定器を2本立て、同じ NTP 標本を食わせてティック源だけ変える**: `gXtal`(esp_timer) が水晶、`gFs`(I2S 累積フレーム数) が `fs`。`NtpTimebase` はティック源を問わない設計なので**1行も変えずに済んだ**。**構成上この2つは一致しなければならず、不一致なら配線かクロック経路が想定と違う**（比較対象は +3.8873 ppm）。**落とし穴を2つ潰した**: ①**ESP32 が I2S マスタなので PCM1808 が無くても BCK/LRCK は出る** — フレーム数だけでは配線を証明できず「測れたように見える」ので、L/R の振幅 `l_pp`/`r_pp` を毎行載せた（0 なら DOUT が死んでいる） ②**DMA が溢れるとフレームを数え損ねて `fs` が静かに低く出る** — イベントキューで `RX_Q_OVF` を数え、検出したら `gFs.reset()` し、**吸い出しを Core1 の専用タスクへ出した**（SNTP は Core0 で最大2秒ブロックしうる。DMA は 85ms ぶんしか無い）。CSV は末尾に8列追記（既存の解析を壊さない）。**`platform` を `espressif32@7.0.1` で pin した** — このコードはレガシー `driver/i2s.h` 依存で、core 3.x(IDF5) は別 API だ | [log/2026-08-05-fs-measurement-firmware.md](log/2026-08-05-fs-measurement-firmware.md) |
@@ -32,8 +33,8 @@
 |---|---|
 | 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.0.0**（public・切り出し済み。`Batch` の契約が確定） |
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
-| 未入手 | GNSS 受信機（**NEO-M8N を1枚発注済み**。→ [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**2台目は段階1の判定が出てから決める**）、**アクティブアンテナ（未購入。GPS/GLONASS 両対応のものを買え）**、DMM（HIOKI 3244-60） |
-| 稼働中 | **フェーズ1.5 の soak が母艦上で走っている**（2026-08-04〜）。生ログは `soak/`（gitignore 対象）。捕捉は `tools/soak_capture.py <port> <path>`。**繋ぎ直すと基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直さないこと。**一昼夜ぶんの読みは済んでいる**（→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）ので**急いで見る必要は無い** |
+| 未入手 | **アクティブアンテナ（未購入。GPS/GLONASS 両対応のものを買え。優先度最高）**、GNSS 受信機2台目（1台目は NEO-M8N を発注済み → [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**段階1の判定が出てから決める**）、AFE の LPF/OPアンプ/TVS（未確定、選定待ち）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
+| 稼働中 | フェーズ1.5のsoakは2026-08-07時点で停止済み（水晶soakの一昼夜ぶんの結果は確保済み。→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。**代わりに実配線でのfs実測が完了し、リスク10を解消した**（→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)） |
 | コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**で、v2 から **I2S を回して `fs` も同時に測る**（位相推定も送信もまだ無い）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.0.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
 
@@ -55,12 +56,11 @@
   **soak は止めていない**が、**主要な問いは片付いたので急ぎの用は無い**
 - ~~**`fs` を測るファームを書く**~~ **済み**（2026-08-05。`firmware/src/main.cpp` v2。
   → [log/2026-08-05-fs-measurement-firmware.md](log/2026-08-05-fs-measurement-firmware.md)）
-- **配線して `fs` を実測する** — **次の一手。** [hardware.md](hardware.md) の表の通りに繋いで焼く。
-  見るのは3つ: ①**`l_pp`/`r_pp` が 0 でないこと**（0 なら DOUT が死んでいて以降は無意味）
-  ②**`ovf` が 0 のままであること** ③**`fs_ppm` が `ppm`（水晶側）と一致すること**。
-  **一致・不一致を語るのは半日待ってから**（`fs_resid_ns` が 0.1ppm 級に落ちるまで）。
-  **これでリスク10 の残り半分が埋まる。**
-  配線に手を付ける時点で soak の捕捉プロセスを落とすこと（`kill 54464 54813`）
+- ~~**配線して `fs` を実測する**~~ **済み**（2026-08-07。[hardware.md](hardware.md) の確定部分を
+  実配線し、①`l_pp`/`r_pp`が非0 ②`ovf`が0のまま ③`gFs`と`gXtal`のppm**差分が一定**
+  （単純な一致ではない——`gFs`には水晶と無関係な分周器由来の数十ppmが乗る、と
+  [timebase.md](timebase.md)が予告していた通り）の3点を確認。**リスク10を解消した。**
+  → [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)
 - **アクティブアンテナを買う** — **GNSS 受信機より優先度が高い。**
   受信機は届くが、**アンテナが無いと段階1の判定を始められない**（測っているのは
   受信機の性能ではなく空の見え方で、それを決めるのはアンテナと設置場所だ）。
