@@ -44,12 +44,14 @@
 
 ## フェーズ1以降 (ハードウェアが要る)
 
-1. **AFE + PCM1808 の疎通** — `NAMZ_SENSOR_TEST` と同じパターンで
-   `NAMZ_GRIDFREQ_TEST` ビルドフラグを作り、シリアルに生サンプルを吐く。
-   既存の `tools/capture_serial.py` + `tools/spectrum.py` で FFT。
-   50/60Hz の判別と THD の実測。
-   **I2S はこの時点からステレオで初期化する**(R ch は未接続。捨てずにノイズフロアを見る)。
-   **PCM1808 の SCKI をどちらが供給するかの両構成を試し、フェーズ1.5 の実測で決める**
+1. ~~**AFE + PCM1808 の疎通**~~ **完了(2026-08-07)** — `NAMZ_SENSOR_TEST` と同じ
+   パターンで `NAMZ_GRIDFREQ_TEST` ビルドフラグを作り、シリアルに生サンプルを吐いた。
+   `tools/capture_serial.py` + `tools/spectrum.py` で FFT。50Hz の判別と THD の実測が
+   済んだ(基本波50.026Hz、THD 0.0%、ゼロクロス法でも中央値49.934Hz)。
+   **I2S は最初からステレオで初期化済み**(R ch は未接続。ノイズフロアも確認)。
+   **PCM1808 の SCKI が ESP32 の MCLK 駆動であることはフェーズ1.5 の実測で確定**
+   （→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)、
+   [log/2026-08-07-gridfreq-test-mode.md](log/2026-08-07-gridfreq-test-mode.md)）
 1.5. **時間基準プラグイン + `NtpTimebase`(GNSS 不要。ADC すら不要。到着を待たずに始める)** —
    `TimebaseEstimator` を切り、`NominalTimebase` と `NtpTimebase` を実装する。
    **ティック源もインターフェイスにしろ。** 回帰は「単調増加するティックを NTP 時刻に

@@ -247,6 +247,62 @@ void logLine(const char* server, bool ok, const char* err, const timebase::SntpS
 
 }  // namespace
 
+#ifdef NAMZ_GRIDFREQ_TEST
+// NAMZ_GRIDFREQ_TEST を定義してビルドすると WiFi/NTP/fs回帰を一切行わず、
+// I2S の生サンプルを boxcar 平均で間引いてシリアルに吐くだけ
+// （tools/capture_serial.py 用・フェーズ1の疎通確認）。Namazu の NAMZ_SENSOR_TEST と
+// 同じ位置付け（→ docs/roadmap.md）。R ch も同時に出す（未接続でもノイズフロアが見える）。
+
+void setup() {
+  Serial.begin(kSerialBaud);
+  delay(500);
+  Serial.println();
+  Serial.println("# electabuzz gridfreq test (raw I2S dump, decimated)");
+  if (!startI2s()) {
+    Serial.println("# i2s init failed");
+    while (true) delay(1000);
+  }
+  Serial.printf("# i2s pins: mclk=%d bclk=%d lrck=%d din=%d\n", kI2sPinMclk, kI2sPinBclk,
+                kI2sPinLrck, kI2sPinData);
+  Serial.printf("# decimate=%u (nominal effective fs=%.1fHz, NOT calibrated)\n",
+                kGridFreqTestDecimate,
+                static_cast<double>(kFsNominalHz) / kGridFreqTestDecimate);
+  // t は ticksNow()（壁時計）ではなく、累積フレーム数から公称fsで作る仮想時刻。
+  // **理由**: i2s_read は512フレーム(≈10.7ms)ぶんをDMAがまとめて渡してくる。
+  // その場でticksNow()を呼ぶと、1回のreadの中で処理した数点がほぼ同時刻を指し、
+  // 次のreadまでの本来の間隔がその1点に丸め込まれる(バースト処理の時刻をサンプルの
+  // 実時刻と取り違える)。フレームカウンタ起点なら等間隔が保証される
+  Serial.println("# frame_us,l,r");
+}
+
+void loop() {
+  static int32_t buf[kI2sReadFrames * 2];
+  static int64_t lAcc = 0, rAcc = 0;
+  static uint32_t acc = 0;
+  static uint64_t frameIdx = 0;
+
+  size_t got = 0;
+  if (i2s_read(I2S_NUM_0, buf, sizeof(buf), &got, portMAX_DELAY) != ESP_OK || got == 0) return;
+  const size_t frames = got / (sizeof(int32_t) * 2);
+
+  for (size_t i = 0; i < frames; ++i) {
+    lAcc += buf[i * 2] >> 8;
+    rAcc += buf[i * 2 + 1] >> 8;
+    ++frameIdx;
+    if (++acc >= kGridFreqTestDecimate) {
+      char tbuf[24];
+      const uint64_t frameUs = frameIdx * 1000000ULL / kFsNominalHz;
+      Serial.printf("%s,%ld,%ld\n", u64str(frameUs, tbuf, sizeof(tbuf)),
+                    static_cast<long>(lAcc / acc), static_cast<long>(rAcc / acc));
+      lAcc = 0;
+      rAcc = 0;
+      acc = 0;
+    }
+  }
+}
+
+#else
+
 void setup() {
   Serial.begin(kSerialBaud);
   delay(500);
@@ -327,3 +383,5 @@ void loop() {
   // 一定間隔で叩き続けると経路の周期的な混雑と同期しうるので散らす。
   gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
 }
+
+#endif  // NAMZ_GRIDFREQ_TEST
