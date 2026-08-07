@@ -69,6 +69,12 @@
    **ここが成否を決める。最初に潰せ。** 駄目なら方式B。
 3. **Goertzel 位相推定** — `tools/gridfreq/` に Python 参照実装 → C++ 移植 →
    `tools/backtest_gridfreq.py` で照合。既存 jismo と同じ流れ。
+   **Python参照実装(`tools/gridfreq/goertzel.py`)と`tools/backtest_gridfreq.py`は
+   2026-08-07に完了した**（→ [log/2026-08-07-goertzel-reference.md](log/2026-08-07-goertzel-reference.md)）。
+   合成波形で ±1mHz(`docs/timebase.md`の目標精度)以内を確認済み、今日の実キャプチャに
+   通すとゼロクロス法(std 304mHz)より桁違いに安定(std 17.8mHz)した。
+   **C++移植(firmware組み込み)はまだ**——PPS到着(フェーズ2)を待たずに進める判断は
+   したが、`timebase_source=NOMINAL/NTP`でGFRQを実際に送るところまでは未着手
 4. ~~**`batch-uplink` を切り出して v1.0.0 を打つ**~~ **完了(2026-08-03)** —
    `Batch`(レイアウト非依存化済み)・`Uploader`/`HmacSha256`・`TimeSync`(C++)、
    `auth`・`devices`・`notify`・`s3util`(Python)。**一般化を Namazu の中で先に済ませてから
