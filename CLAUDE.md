@@ -58,8 +58,9 @@ firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依�
 **`fs_ppm` が `ppm`（水晶側）と一致すること**。比較対象は **+3.8873 ppm** だ。
 **これでリスク10 の残り半分が埋まる。** 配線に手を付ける時点で soak の捕捉を落とせ。
 
-買い物では **アクティブアンテナが最優先**（→ [docs/progress.md](docs/progress.md)）。
-GNSS 受信機は発注済みだが、**アンテナが無いと段階1の判定を始められない。**
+買い物は一段落した。**GNSS 受信機・アクティブアンテナ（GPS+BD+GLONASS対応を2本。予備込み）とも
+発注済みで、到着待ち**（→ [docs/progress.md](docs/progress.md)）。アンテナが届いたら
+段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
 
 `terraform/` を書く手もあるが、**急ぐ理由は無い。**
 デバイス側の送信経路がまだ無く（`main.cpp` は soak 専用）、
