@@ -62,6 +62,39 @@ device も**署名検証に通った名乗り**を使い、本文の値は信用
 周波数側のイベント定義(逸脱・RoCoF・停電)も通知先も未確定で、**今書くと確定した頃に
 作り直しになる**。JSON なのでフィールドを差し替えるだけであり、後から足す費用は小さい。
 
+## api
+
+**実装済み: `lambda/api/handler.py`**（テストは `lambda/tests/test_api.py`）。
+ダッシュボード向けの読み取り専用API（Function URL、認証なし・CORS許可）。
+
+    GET /recent?minutes=5&start=<us>
+
+直近`minutes`分（既定5、上限`MAX_RECENT_MINUTES`=30。認証なし公開なので
+S3スキャン量に上限を付けている）の瞬時周波数の時系列を返す。`start`指定時は
+`[start-minutes, start]`。
+
+**detect/rollup/生存台帳がまだ無いので、Namazuの`api`と違って`/events`・
+`/devices`は無い。** `/recent`の`latest`(系列末尾点)に`timebase_source`・
+`fs_measured_hz`・`tb_residual_ns`等の品質を載せており、ダッシュボードの
+「今の状態」表示と生存確認を兼ねる。
+
+瞬時周波数は`Record.cycles`(絶対累積位相)の隣接差分から`lambda/store_gridfreq.py`
+が計算する。**以下のいずれかに該当する隣接点はfreqを計算しない(null=系列の
+途切れ)**——測れなかった区間を測れたように見せないため:
+
+- `session_id`が変わる(デバイス再起動)
+- 実際の間隔が`record_rate_mhz`から大きく外れる(欠測・送信遅延)
+- バッチに`GfrqFlagDiscontinuity`が立っている(DMA溢れ等。ファーム側の
+  `GoertzelEstimator::resetWindow()`がこの窓を無出力にするため、ワイヤ上の
+  レコード列は詰まって見えるが実際の間隔は`record_rate_mhz`どおりではない)
+
+## dashboard
+
+**実装済み: `dashboard/`**（v1。→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)）。
+外部依存なしの単一ページ(vanilla JS + Canvas)。`/recent`だけを叩き、瞬時周波数の
+折れ線と時間基準の品質を表示する。S3 + CloudFront(OAC)で配信し、カスタムドメインは
+無い(CloudFrontの既定ドメインで足りるうちは持ち込まない)。
+
 ## 新規 detect_gridfreq / rollup
 
 既存の状態機械を流用して判定だけ差し替える。

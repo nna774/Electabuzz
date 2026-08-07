@@ -1,7 +1,8 @@
 # Electabuzz — 作業のためのエントリポイント
 
 商用電力の周波数と**系統時刻偏差**（グリッドの時計が標準時から何秒ずれているか）を
-常時測る装置。設置先は 50Hz 地域（東日本）。設計フェーズで、コードは未着手。
+常時測る装置。設置先は 50Hz 地域（東日本）。**実機1台が稼働中で、系統周波数の
+ダッシュボードも公開済み**（→ 2章）。GNSS到着後のフェーズ2(PPS)が最後の本丸。
 
 このファイルは**ハブであって仕様ではない**。実体は各ドキュメントにある。
 必要なノードまでリンクを辿れ。全部読む必要はない。
@@ -24,24 +25,35 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**GNSS 受信機・アクティブアンテナは発注済みで到着待ち**
-（MCU の ESP32-S3-WROOM-1 N16R8・PCM1808 は手元にあり、**PCM1808 は無改造で使える**。
-配線とピン割り当ては [docs/hardware.md](docs/hardware.md) に確定済み）。
-**`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
-契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
-**フェーズ1.5（`NtpTimebase` による `fs` 実測）は完了し、リスク10 を解消した**
-（水晶は **+3.8873 ppm**、`fs` との差分は分周器由来で一定 → [docs/timebase.md](docs/timebase.md)）。
-**フェーズ3（Goertzel 位相推定）も C++ 移植まで完了した**——`firmware/lib/Goertzel/`
-（単一ビンDFTの2次IIR再帰）が、PPS(フェーズ2)を待たずに `NAMZ_GRIDFREQ_RECORD`
-ビルドモード（`env:record`）で実際に `timebase_source=NTP` として GFRQ を送るところまで
-実装済み。**ただし実機には未投入**（→ [docs/log/2026-08-07-goertzel-cpp-port.md](docs/log/2026-08-07-goertzel-cpp-port.md)）。
-**`ingest` Lambda（`lambda/ingest/`）も書けている**（`/alert` は未実装）。
-送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**）は切り出し済みで
-**`Batch` の契約は確定している**（pin は Namazu 側の後方互換な追加のみで v1.0.0 から上げた）。
-**`terraform/` も ingest 分（バケット・IAM・Lambda・Function URL）を書いて `apply` 済み**
-——`ingest_url` が出ている。state は Namazu と同じ保存先バケットの別 key で独立させてある。
-**`firmware/src/secrets.h` も埋めてある**（WiFi・`kDeviceId`・HMAC 鍵・`kIngestUrl`。
-2号機の予定は無いので per-device 鍵は使わずフラット構成。→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）。
+要点だけ言うと、**フェーズ0〜1.5・3・4・5・6・8(v1)は完了し、実機1台が
+`env:record` で稼働、ダッシュボードも実データを表示している。** 残るのは
+GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)。
+
+- **時間基準**: `firmware/lib/Timebase/`（`NtpTimebase`）で `fs` 実測が完了、
+  リスク10解消（水晶は **+3.8873 ppm**、`fs` との差分は分周器由来で一定 →
+  [docs/timebase.md](docs/timebase.md)）
+- **位相推定**: `firmware/lib/Goertzel/`（単一ビンDFTの2次IIR再帰）。
+  PPS(フェーズ2)を待たずにC++移植した——PPSが効くのは結果を絶対時刻へ固定する
+  後段の較正だけで、Goertzel本体はLチャンネルの生サンプルと`fs`だけで完結する
+  という整理に基づく（→ [docs/log/2026-08-07-goertzel-cpp-port.md](docs/log/2026-08-07-goertzel-cpp-port.md)）
+- **`GFRQ`の書き手・読み手**: `firmware/lib/GridFreq/` と `lambda/wire_gridfreq.py`。
+  契約は `testdata/gfrq_v1_golden.hex` で両側から固定
+- **実機**: `env:record`ビルドモードを焼き、`fs`がNTPで規正できてからGoertzelを
+  起動、`timebase_source=NTP`と正直に申告してGFRQバッチを`Uploader`で送信。
+  **実際に`ingest`まで届き、`series/`に着弾することを確認済み**
+- **クラウド**: `lambda/ingest/`（受信）+ `lambda/api/`（`/recent`のみ。
+  detect/生存台帳が無いので`/events`・`/devices`は無い）。送信基盤は
+  [batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**
+  （pinはNamazu側の後方互換な追加のみでv1.0.0から上げた）
+- **`terraform/`**: ingest + api + dashboard 分を書いて **`apply`済み**。
+  state はNamazuと同じ保存先バケットの別keyで独立。detect/rollup/watchdogは
+  対応するLambdaが無いのでまだ書いていない
+- **ダッシュボード**: `dashboard/`（vanilla JS + Canvas、外部依存なし）。
+  瞬時周波数と時間基準の品質(`timebase_source`等)を表示。実データで動作確認済み
+  （→ [docs/log/2026-08-07-dashboard-v1.md](docs/log/2026-08-07-dashboard-v1.md)）
+- **`firmware/src/secrets.h`・`terraform/terraform.tfvars`**: 埋め済みだが
+  **gitignore対象なのでこのworktreeにしか無い。本体の作業ツリーへ手でコピーが要る**
+  （→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
@@ -53,23 +65,16 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 ### 着手可能なタスク
 
-**次の一手は `env:record` を実機に焼いて確認することだ。** `terraform apply` も
-`secrets.h` を埋めるのも済んでいる——**ただし `secrets.h`（と `terraform/terraform.tfvars`）は
-gitignore 対象なので worktree からは持ち出されない。本体の作業ツリーへ手でコピーすること**
-（→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）。
-見るのは3つ: **`fs` ロック後に `# goertzel armed` が出ること**（NTP で 600 秒以上かかる）、
-**バッチが `ingest` まで届き `series/` に着弾すること**、**`timebase_source=NTP`・
-`f_nominal_mhz=50000` で記録されること**。**接続すると soak が積み直しになる**ので、
-着手する時に判断する（soak の主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md)
-で片付いているので、止めて実地確認へ切り替えて構わない）。
+**次の一手はGNSS受信機・アクティブアンテナの到着待ち**（→ [docs/progress.md](docs/progress.md)）。
+届いたら段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進め、それが済んだら
+フェーズ2(PPS同時サンプリング。方式A)に着手する——**ここが設計全体の成否を決める**。
 
-GNSS 受信機・アクティブアンテナは発注済みで到着待ち（→ [docs/progress.md](docs/progress.md)）。
-届いたら段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
-
-detect・rollup・api・watchdog・CloudFront 用の terraform は対応する Lambda が
-まだ無いので書いていない（フェーズ8/9）。**OTA は今はやらない**——開発中の
-USB挿し直しが面倒という声はあるが、着手するのは実際に苦になってからでよい
-（→ [docs/open-questions.md](docs/open-questions.md)「急がないがそのうちやりたいこと」）。
+それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
+（どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
+**OTA は今はやらない**——開発中のUSB挿し直しが面倒という声はあるが、着手するのは
+実際に苦になってからでよい（→ [docs/open-questions.md](docs/open-questions.md)
+「急がないがそのうちやりたいこと」）。detect・rollup・watchdog 用の terraform は
+対応する Lambda がまだ無いので書いていない（フェーズ9）。
 
 ## 3. 絶対に破ってはいけない不変条件
 

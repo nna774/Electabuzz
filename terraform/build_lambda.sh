@@ -3,7 +3,7 @@
 # handler.py + 同階層の依存モジュールを集め、batch_uplink を同梱する。
 # terraform apply の前に実行すること。
 #
-# 今は ingest しか無い（detect/rollup/api は未実装 → docs/roadmap.md）。
+# 今は ingest/api の2本（detect/rollup は未実装 → docs/roadmap.md）。
 # 増えたら Namazu の build_lambda.sh と同じ形で for ループに足す。
 set -euo pipefail
 
@@ -37,4 +37,18 @@ build_ingest() {
   echo "built $BUILD/ingest.zip"
 }
 
+build_api() {
+  stage="$BUILD/api"
+  mkdir -p "$stage"
+  cp "$LAMBDA/api/handler.py" "$stage/handler.py"
+  cp "$LAMBDA/s3keys.py" "$stage/s3keys.py"
+  cp "$LAMBDA/wire_gridfreq.py" "$stage/wire_gridfreq.py"
+  cp "$LAMBDA/store_gridfreq.py" "$stage/store_gridfreq.py"
+  # api は認証しないので batch_uplink(auth/devices) は不要。numpyも不要。
+  find "$stage" -name '__pycache__' -type d -prune -exec rm -rf {} +
+  (cd "$stage" && zip -qr "$BUILD/api.zip" .)
+  echo "built $BUILD/api.zip"
+}
+
 build_ingest
+build_api

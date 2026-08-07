@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-07 | **ダッシュボードv1を作ってapplyし、実データで動作確認した。** `lambda/api/handler.py`(`/recent`のみ)・`lambda/store_gridfreq.py`(累積位相の差分から瞬時周波数を計算)・`dashboard/`(vanilla JS + Canvas)・`terraform/dashboard.tf`(S3+CloudFront、カスタムドメイン無し)。**「測れなかった区間を測れたように見せない」ため、`session_id`変化・想定外の間隔・`GfrqFlagDiscontinuity`のいずれかに該当する隣接点はfreqをnullにして系列を途切れさせる**——特にdiscontinuityは、タイムスタンプの間隔チェックだけでは検出できない罠だった(ファーム側`resetWindow()`がワイヤ上のレコード列を詰めて出すため)。テスト8件追加(計45件)全緑、`apply`実行(8 add/2 change)、**実際にブラウザで系統周波数のグラフ(49.98〜50.04Hz程度)が表示されることを確認した**。追加の実費は月100円未満の見込み | [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md) |
 | 2026-08-07 | **ingest分のterraformをapplyし、`firmware/src/secrets.h`を埋めた。** 7リソース作成成功、`ingest_url`が出た(`electabuzz-ingest`のFunction URL)。WiFiはNamazuの`tools/devices.json`から転記、HMAC鍵は新規に乱数生成して`secrets.h`と`terraform.tfvars`で揃えた。**2号機の予定は無いのでper-device鍵は使わずフラット構成。** OTA(NamazuがNVS化した理由)は検討したが**今はやらないと判断**——OTA自体が無い今はNVS化の利点が効かない。要望は[open-questions.md](open-questions.md)へメモした。`pio run -e record`は引き続き緑。**残るタスクは実機に焼いて確認するだけ** | [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md) |
 | 2026-08-07 | **`terraform/`を新規に立て、ingest分(バケット・IAM・Lambda・Function URL)を書いた。** state はNamazuと同じ保存先バケットの別key(`electabuzz.tfstate`)で独立。detect/rollup/api/watchdog/CloudFrontは対応するLambda本体が無いのでまだ書いていない。`build_lambda.sh`で`ingest.zip`(`handler.py`+`s3keys.py`+`wire_gridfreq.py`+`batch_uplink`v1.6.0)を生成できることを確認、`terraform validate`も緑。**`apply`はまだ実行していない**(費用が生じる操作なので明示の許可が要る) | [log/2026-08-07-terraform-ingest-stack.md](log/2026-08-07-terraform-ingest-stack.md) |
 | 2026-08-07 | **Goertzelをfirmwareへ移植し、フェーズ2(PPS)を待たずにGFRQの記録・送信を実装した。** `firmware/lib/Goertzel/`(標準的な2次IIR再帰、状態2個。48000サンプルのバッファもtrig大量呼び出しも不要)。`NAMZ_GRIDFREQ_RECORD`ビルドモードで、`fs`がNtpTimebaseで規正できてから(NTPで600秒以上)Goertzelを起動し、`timebase_source=NTP`と正直に申告してGFRQバッチを`Uploader`で送る。**「PPSが効くのは結果を絶対時刻へ固定する後段の較正だけ」という整理に基づき、C++移植をフェーズ2待ちにしていた前回の判断を覆した。** `batch-uplink`のpinもv1.0.0→v1.6.0に上げた(Namazu側の後方互換な追加のみで、Namazu自身のpinも既にv1.6.0だった)。ホストの単体テスト(GridFreq/Timebase/Goertzel)・`pio run`全env(s3/gridfreqtest/record)は緑、**実機には未投入** | [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md) |
@@ -42,7 +43,7 @@
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
 | 未入手 | **アクティブアンテナ（GPS+BD+GLONASS対応品を2本発注済み。→ [log/2026-08-07-antenna-order.md](log/2026-08-07-antenna-order.md)。到着待ち）**、GNSS 受信機2台目（1台目は NEO-M8N を発注済み → [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**段階1の判定が出てから決める**）、AFE の C1 用コンデンサ(≈15〜22nF、E24)・TVS（**OPアンプは不要になった見込み**。→ [hardware.md](hardware.md)）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
 | 稼働中 | フェーズ1.5のsoakは2026-08-07時点で停止済み（水晶soakの一昼夜ぶんの結果は確保済み。→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。**代わりに実配線でのfs実測が完了し、リスク10を解消した**（→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)） |
-| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。**位相推定は `firmware/lib/Goertzel/`**（単一ビンDFTの2次IIR再帰。Python参照実装`tools/gridfreq/goertzel.py`のC++移植）。`firmware/src/main.cpp` は3つのビルドモードを持つ: 既定(`env:s3`。soak専用、位相推定も送信もしない)、`NAMZ_GRIDFREQ_TEST`(`env:gridfreqtest`。疎通確認用の生サンプルダンプ)、**`NAMZ_GRIDFREQ_RECORD`(`env:record`。フェーズ2を待たずにGoertzel+GFRQ+`Uploader`を実際に動かす。`timebase_source=NTP`。実機には未投入)**。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装）。**`terraform/`はingest分(バケット・IAM・Lambda・Function URL)を書いて`apply`済み**（`ingest_url`が出ている。→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。**`firmware/src/secrets.h`も埋めてある**（WiFi・`kDeviceId`・HMAC鍵・`kIngestUrl`。gitignore対象なのでworktreeからのコピーが要る）。detect/rollup/api/watchdog/CloudFrontは対応するLambdaが無いのでterraformも未着手 |
+| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。**位相推定は `firmware/lib/Goertzel/`**（単一ビンDFTの2次IIR再帰。Python参照実装`tools/gridfreq/goertzel.py`のC++移植）。`firmware/src/main.cpp` は3つのビルドモードを持つ: 既定(`env:s3`。soak専用、位相推定も送信もしない)、`NAMZ_GRIDFREQ_TEST`(`env:gridfreqtest`。疎通確認用の生サンプルダンプ)、**`NAMZ_GRIDFREQ_RECORD`(`env:record`。フェーズ2を待たずにGoertzel+GFRQ+`Uploader`を実際に動かす。`timebase_source=NTP`)**。**`env:record`は実機に投入済みで、`fs`ロック後に実際にバッチを送れていることを確認した**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。**クラウド側は `lambda/ingest/handler.py` + `lambda/api/handler.py`(`/recent`) + `lambda/store_gridfreq.py`**（`/alert`・detect・rollupは未実装）。**`dashboard/`(vanilla JS + Canvas)も実データで動作確認済み**（→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)）。**`terraform/`はingest+api+dashboard分を書いて`apply`済み**。**`firmware/src/secrets.h`も埋めてある**（gitignore対象なのでworktreeからのコピーが要る）。detect/rollup/watchdogは対応するLambdaが無いのでterraformも未着手 |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.6.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh` / `firmware/lib/Goertzel/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`(`-e s3`/`-e gridfreqtest`/`-e record`)。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`。`env:record`を使うには`kDeviceId`/`kIngestUrl`/`kHmacSecret`を埋める） |
 
 ### 着手可能なタスク
@@ -80,16 +81,17 @@
 - ~~**`terraform apply`して`secrets.h`を埋める**~~ **済み**（2026-08-07。
   `ingest_url`が出た。WiFi・`kDeviceId`・HMAC鍵も埋めた(フラット構成、per-device鍵は未使用)。
   → [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）
-- **`env:record`を実機で焼いて確認する** — worktree内の`firmware/src/secrets.h`を
-  本体の作業ツリーへコピーしてから焼く(gitignore対象なのでPRには乗らない)。見るのは
-  ①`fs`ロック後に`# goertzel armed`が出る ②バッチが`ingest`まで届き
-  `series/`に着弾する ③`timebase_source=NTP`・`f_nominal_mhz=50000`で
-  記録されること。**soakを止める(=繋ぎ直す)ことになるので、着手する時に判断する**
+- ~~**`env:record`を実機で焼いて確認する**~~ **済み**（2026-08-07。soakを止めて
+  焼いた。`fs`ロック後にGoertzelが起動し、実際に`series/`へバッチが着弾することを
+  S3/APIから確認した。→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）
+- ~~**ダッシュボードv1を作る**~~ **済み**（2026-08-07。`/recent`のみのapi + vanilla JSの
+  ダッシュボード。実データ(49.98〜50.04Hz程度)がグラフに出ることをブラウザで確認した。
+  → [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)）
 
 ### まだ触っていない領域
 
-**フェーズ2(PPS同時サンプリング)そのもの**（GNSS本体が未到着）。
-**`terraform/`はingest分のみ**——detect/rollup/api/watchdog/CloudFrontに対応する
+**フェーズ2(PPS同時サンプリング)そのもの**（GNSS本体が未到着）。時刻偏差(TE)の絶対値・
+欠測区間の可視化はPPS到着後。**`terraform/`はingest+api+dashboard分のみ**——detect/rollup/watchdogに対応する
 Lambdaがまだ無いので、それらのterraformも未着手（→ [log/2026-08-07-terraform-ingest-stack.md](log/2026-08-07-terraform-ingest-stack.md)）。
 **位相推定(Goertzel)のC++移植とGFRQ送信は2026-08-07にフェーズ2を待たずに完了した**
 （→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)。
