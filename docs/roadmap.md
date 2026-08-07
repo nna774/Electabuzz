@@ -67,25 +67,32 @@
 2. **PPS の同時サンプリング(方式A)** — R ch に PPS を入れ、エッジ間サンプル数から
    実効サンプルレートを同定。回帰残差が ppb 級に落ちることを確認。
    **ここが成否を決める。最初に潰せ。** 駄目なら方式B。
-3. **Goertzel 位相推定** — `tools/gridfreq/` に Python 参照実装 → C++ 移植 →
-   `tools/backtest_gridfreq.py` で照合。既存 jismo と同じ流れ。
-   **Python参照実装(`tools/gridfreq/goertzel.py`)と`tools/backtest_gridfreq.py`は
-   2026-08-07に完了した**（→ [log/2026-08-07-goertzel-reference.md](log/2026-08-07-goertzel-reference.md)）。
-   合成波形で ±1mHz(`docs/timebase.md`の目標精度)以内を確認済み、今日の実キャプチャに
-   通すとゼロクロス法(std 304mHz)より桁違いに安定(std 17.8mHz)した。
-   **C++移植(firmware組み込み)はまだ**——PPS到着(フェーズ2)を待たずに進める判断は
-   したが、`timebase_source=NOMINAL/NTP`でGFRQを実際に送るところまでは未着手
+3. ~~**Goertzel 位相推定**~~ **完了(2026-08-07)** — `tools/gridfreq/` に Python 参照実装 →
+   C++ 移植（`firmware/lib/Goertzel/`）→ `tools/backtest_gridfreq.py` で照合。既存 jismo
+   と同じ流れ。Python参照実装は合成波形で ±1mHz(`docs/timebase.md`の目標精度)以内を
+   確認済み、実キャプチャに通すとゼロクロス法(std 304mHz)より桁違いに安定(std 17.8mHz)
+   した（→ [log/2026-08-07-goertzel-reference.md](log/2026-08-07-goertzel-reference.md)）。
+   **C++移植はフェーズ2(PPS)を待たずに完了させた**——PPSが効くのは結果をGNSS絶対時刻へ
+   固定する後段の較正だけで、Goertzel本体はLチャンネルの生サンプルと`fs`だけで完結する
+   という整理に基づく判断（→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)）。
+   標準的な2次IIR再帰(状態2個)に置き換えてあり、`firmware/lib/Goertzel/test/run.sh`で
+   符号・振幅・高調波除去を検証済み。`NAMZ_GRIDFREQ_RECORD`ビルドモードで
+   `timebase_source=NTP`としてGFRQを実際に送るところまで実装したが**実機には未投入**
 4. ~~**`batch-uplink` を切り出して v1.0.0 を打つ**~~ **完了(2026-08-03)** —
    `Batch`(レイアウト非依存化済み)・`Uploader`/`HmacSha256`・`TimeSync`(C++)、
    `auth`・`devices`・`notify`・`s3util`(Python)。**一般化を Namazu の中で先に済ませてから
-   移した**ので v1.1.0 は無く、**両プロジェクトが v1.0.0 を指す**。
+   移した**ので独立レポで無理にタグを分けることはしなかった。
+   **その後 Namazu が OTA 等のために v1.1.0〜v1.6.0 を切っており(いずれも後方互換の
+   追加)、現在の pin は両プロジェクトとも v1.6.0**（→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)）。
    → [batch-uplink.md](batch-uplink.md)
-5. **`GFRQ` ヘッダを `Batch` に載せる** — `Batch(30, 12, 64, 0)` に64バイトヘッダを書き、
-   `records()`/`recordsSize()` から `crc32` を埋める薄い層。
-   ヘッダは `static_assert` で寸法を固定する。**ハードウェア不要でホストの g++ でテストできる**ので、
-   **フェーズ1〜3と並行して進められる**
-6. **送信** — `Uploader` に無改造で通す。
-   **回線を意図的に数時間切り、復帰後に `series/` に穴がないことを S3 側で確認**
+5. ~~**`GFRQ` ヘッダを `Batch` に載せる**~~ **完了(2026-08-03)** — `Batch(30, 12, 64, 0)` に
+   64バイトヘッダを書き、`records()`/`recordsSize()` から `crc32` を埋める薄い層
+   (`firmware/lib/GridFreq/`)。ヘッダは `static_assert` で寸法を固定してある。
+   ハードウェア不要でホストの g++ でテストできる形で、フェーズ1〜3と並行して進めた
+6. **送信** — `Uploader` に無改造で通す。**コードは書けた**
+   (`NAMZ_GRIDFREQ_RECORD`ビルドモード。→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md))
+   が**実機には未投入**。実地確認では
+   **回線を意図的に数時間切り、復帰後に `series/` に穴がないことを S3 側で確認**すること
 7. **`Electabuzz/terraform/` を新規に立てる** — 新バケット・新テーブル・ingest・detect・
    rollup・api・watchdog・CloudFront。**NamazuHaUrokoGaNai の `terraform/` には
    一切 apply しない**

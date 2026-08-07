@@ -24,43 +24,41 @@
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**GNSS は未入手。MCU（ESP32-S3-WROOM-1 N16R8）と PCM1808 が手元にある**
-（PCM1808 は**無改造で使え、配線とピン割り当ては [docs/hardware.md](docs/hardware.md) に確定済み**）。
+要点だけ言うと、**GNSS 受信機・アクティブアンテナは発注済みで到着待ち**
+（MCU の ESP32-S3-WROOM-1 N16R8・PCM1808 は手元にあり、**PCM1808 は無改造で使える**。
+配線とピン割り当ては [docs/hardware.md](docs/hardware.md) に確定済み）。
 **`GFRQ` の書き手（`firmware/lib/GridFreq/`）と読み手（`lambda/wire_gridfreq.py`）が揃い、
 契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**
-**フェーズ1.5 の soak（`firmware/lib/Timebase/`）は母艦で走行中**で、
-**一昼夜ぶんの結果はもう出ている**（手元の水晶は **+3.8873 ppm**、温度補正は不要、
-`NtpTimebase` の実力は **0.2 ppm 級**）。**`ingest` Lambda（`lambda/ingest/`）も書けている**
-（`/alert` と `terraform/` は未着手）。
-送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.0.0**）は切り出し済みで
-**`Batch` の契約は確定している**。
+**フェーズ1.5（`NtpTimebase` による `fs` 実測）は完了し、リスク10 を解消した**
+（水晶は **+3.8873 ppm**、`fs` との差分は分周器由来で一定 → [docs/timebase.md](docs/timebase.md)）。
+**フェーズ3（Goertzel 位相推定）も C++ 移植まで完了した**——`firmware/lib/Goertzel/`
+（単一ビンDFTの2次IIR再帰）が、PPS(フェーズ2)を待たずに `NAMZ_GRIDFREQ_RECORD`
+ビルドモード（`env:record`）で実際に `timebase_source=NTP` として GFRQ を送るところまで
+実装済み。**ただし実機には未投入**（→ [docs/log/2026-08-07-goertzel-cpp-port.md](docs/log/2026-08-07-goertzel-cpp-port.md)）。
+**`ingest` Lambda（`lambda/ingest/`）も書けている**（`/alert` と `terraform/` は未着手）。
+送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**）は切り出し済みで
+**`Batch` の契約は確定している**（pin は Namazu 側の後方互換な追加のみで v1.0.0 から上げた）。
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
 firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依存）
+firmware/lib/Goertzel/test/run.sh          # 同上
 .venv/bin/python -m pytest lambda/tests    # repo 直下の .venv（Namazu と同じ形）
-.venv/bin/pio run -d firmware              # ビルド（platformio も同じ .venv に入っている）
+.venv/bin/pio run -d firmware -e s3 -e gridfreqtest -e record  # ビルド（3 env とも実機不要）
 ```
 
 ### 着手可能なタスク
 
-**PCM1808 が届いたので手は動かせる。** soak はまだ回しているが、
-**主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md) で
-片付いている**（水晶の実 ppm・温度依存の不在・`residual_ns` の床）ので**急いで見るな**。
-生ログは `soak/`（gitignore 対象）、捕捉は `tools/soak_capture.py <port> <path>`。
-**接続すると基板がリセットされて回帰が積み直しになる**ので、用も無く繋ぎ直すな。
-読むだけなら `tail soak/soak-*.csv` で足りる。**ポートを開くな。**
+**次の一手は `env:record` を実機に焼いて確認することだ。** `firmware/src/secrets.h` に
+`kDeviceId`/`kIngestUrl`/`kHmacSecret` を埋めて焼く。見るのは3つ: **`fs` ロック後に
+`# goertzel armed` が出ること**（NTP で 600 秒以上かかる）、**バッチが `ingest` まで届き
+`series/` に着弾すること**、**`timebase_source=NTP`・`f_nominal_mhz=50000` で記録される
+こと**。**接続すると soak が積み直しになる**ので、着手する時に判断する
+（soak の主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md)
+で片付いているので、止めて実地確認へ切り替えて構わない）。
 
-**次の一手は配線して `fs` を実測することだ。ファームはもう書けている**
-（`firmware/src/main.cpp` v2。水晶と `fs` を同じ NTP 標本から同時に出す）。
-**AFE も GNSS も DMM も要らない。** 見るのは3つ: **`l_pp`/`r_pp` が 0 でないこと**
-（0 なら DOUT が死んでいて以降は無意味）、**`ovf` が 0 のままであること**、
-**`fs_ppm` が `ppm`（水晶側）と一致すること**。比較対象は **+3.8873 ppm** だ。
-**これでリスク10 の残り半分が埋まる。** 配線に手を付ける時点で soak の捕捉を落とせ。
-
-買い物は一段落した。**GNSS 受信機・アクティブアンテナ（GPS+BD+GLONASS対応を2本。予備込み）とも
-発注済みで、到着待ち**（→ [docs/progress.md](docs/progress.md)）。アンテナが届いたら
-段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
+GNSS 受信機・アクティブアンテナは発注済みで到着待ち（→ [docs/progress.md](docs/progress.md)）。
+届いたら段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
 
 `terraform/` を書く手もあるが、**急ぐ理由は無い。**
 デバイス側の送信経路がまだ無く（`main.cpp` は soak 専用）、

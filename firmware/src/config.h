@@ -62,3 +62,11 @@ static constexpr uint32_t kWifiRetryDelayMs = 5000;
 // → docs/hardware.md）。48で割ると実効レート1000Hzで、50Hz確認には十分な上、
 // ナイキストの余裕もある。**この間引きはTE級の精度を主張しない、粗いチェック用**
 static constexpr uint32_t kGridFreqTestDecimate = 200;
+
+// --- NAMZ_GRIDFREQ_RECORD（フェーズ2を待たずに実測・記録・送信を開始するモード）---
+// → docs/log/2026-08-07-goertzel-cpp-port.md
+static constexpr uint32_t kMaxRamBatches = 4;
+static constexpr const char* kSpillDir = "/gfrq_spill";
+// timesync（システム時刻用の別SNTP、batch_start_us用）が一度に補正してよい上限。
+// 超えたらslewでなくstepで一発補正する。Namazuと同じ値。
+static constexpr uint32_t kTimeSyncStepThresholdSeconds = 10;
