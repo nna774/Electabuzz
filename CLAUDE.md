@@ -35,9 +35,12 @@
 （単一ビンDFTの2次IIR再帰）が、PPS(フェーズ2)を待たずに `NAMZ_GRIDFREQ_RECORD`
 ビルドモード（`env:record`）で実際に `timebase_source=NTP` として GFRQ を送るところまで
 実装済み。**ただし実機には未投入**（→ [docs/log/2026-08-07-goertzel-cpp-port.md](docs/log/2026-08-07-goertzel-cpp-port.md)）。
-**`ingest` Lambda（`lambda/ingest/`）も書けている**（`/alert` と `terraform/` は未着手）。
+**`ingest` Lambda（`lambda/ingest/`）も書けている**（`/alert` は未実装）。
 送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**）は切り出し済みで
 **`Batch` の契約は確定している**（pin は Namazu 側の後方互換な追加のみで v1.0.0 から上げた）。
+**`terraform/` も ingest 分（バケット・IAM・Lambda・Function URL）を書いた**——
+state は Namazu と同じ保存先バケットの別 key で独立させてある。
+**ただし `apply` はまだしていない**（→ [docs/log/2026-08-07-terraform-ingest-stack.md](docs/log/2026-08-07-terraform-ingest-stack.md)）。
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
@@ -60,9 +63,12 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 GNSS 受信機・アクティブアンテナは発注済みで到着待ち（→ [docs/progress.md](docs/progress.md)）。
 届いたら段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
 
-`terraform/` を書く手もあるが、**急ぐ理由は無い。**
-デバイス側の送信経路がまだ無く（`main.cpp` は soak 専用）、
-フェーズ2（PPS 同時サンプリング）が成否の分岐点である以上、そちらが通ってからでよい。
+**`env:record` を実機に焼く前に、`terraform apply` が要る**（`ingest_url` が無いと
+送り先が無い）。`terraform.tfvars`（雛形は `terraform.tfvars.example`）に
+`hmac_secret` を埋め、**費用が生じる操作なので実行前にユーザーへ確認すること。**
+`apply` 後の出力 `ingest_url` を `secrets.h` の `kIngestUrl` へ転記する。
+detect・rollup・api・watchdog・CloudFront 用の terraform は対応する Lambda が
+まだ無いので書いていない（フェーズ8/9）。
 
 ## 3. 絶対に破ってはいけない不変条件
 

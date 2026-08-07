@@ -18,9 +18,12 @@ venv/
 
 # Terraform
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
+!*.tfvars.example
+terraform/builds/
 
 # ビルド成果物・退避データ
 build/

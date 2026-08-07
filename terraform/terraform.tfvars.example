@@ -1,0 +1,9 @@
+# cp terraform.tfvars.example terraform.tfvars して埋める
+region      = "ap-northeast-1"
+project     = "electabuzz"
+hmac_secret = "change-me-32bytes-random-secret" # firmware/src/secrets.h の kHmacSecret と一致させる
+
+# デバイス個別の鍵を使うなら（今は1台なので hmac_secret 1本で足りる）。
+# device_hmac_secrets = {
+#   "1" = "..."  # kDeviceId=1 と一致させる
+# }
