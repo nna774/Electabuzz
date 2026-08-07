@@ -23,6 +23,8 @@ venv/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+*.tfplan
+tfplan
 terraform/builds/
 
 # ビルド成果物・退避データ

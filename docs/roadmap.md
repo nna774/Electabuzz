@@ -93,12 +93,12 @@
    (`NAMZ_GRIDFREQ_RECORD`ビルドモード。→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md))
    が**実機には未投入**。実地確認では
    **回線を意図的に数時間切り、復帰後に `series/` に穴がないことを S3 側で確認**すること
-7. **`Electabuzz/terraform/` を新規に立てる** — **ingest 分は書けた**(新バケット・
-   IAMロール・Lambda・Function URL。state は Namazu と同じ保存先バケットの別key
-   ([versions.tf](../terraform/versions.tf))で独立)。**detect・rollup・api・
-   watchdog・CloudFront はまだ**——対応する Lambda 本体が無いので、先に terraform
-   だけ書くと死んだリソース定義になる。**まだ `apply` していない**
-   （→ [log/2026-08-07-terraform-ingest-stack.md](log/2026-08-07-terraform-ingest-stack.md)）。
+7. ~~**`Electabuzz/terraform/` を新規に立てる（ingest分）**~~ **完了(2026-08-07)** —
+   新バケット・IAMロール・Lambda・Function URL。state は Namazu と同じ保存先バケットの
+   別key([versions.tf](../terraform/versions.tf))で独立。**`apply`済みで`ingest_url`が
+   出ている**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。
+   **detect・rollup・api・watchdog・CloudFront はまだ**——対応する Lambda 本体が
+   無いので、先に terraform だけ書くと死んだリソース定義になる。
    **NamazuHaUrokoGaNai の `terraform/` には一切 apply しない**
 8. **ダッシュボード** — 瞬時周波数・時刻偏差・PPS品質・欠測区間。rollup 層の切り替え
 9. **detect + 通知**、**バッテリー給電と停電時の挙動**

@@ -38,9 +38,10 @@
 **`ingest` Lambda（`lambda/ingest/`）も書けている**（`/alert` は未実装）。
 送信基盤（[batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**）は切り出し済みで
 **`Batch` の契約は確定している**（pin は Namazu 側の後方互換な追加のみで v1.0.0 から上げた）。
-**`terraform/` も ingest 分（バケット・IAM・Lambda・Function URL）を書いた**——
-state は Namazu と同じ保存先バケットの別 key で独立させてある。
-**ただし `apply` はまだしていない**（→ [docs/log/2026-08-07-terraform-ingest-stack.md](docs/log/2026-08-07-terraform-ingest-stack.md)）。
+**`terraform/` も ingest 分（バケット・IAM・Lambda・Function URL）を書いて `apply` 済み**
+——`ingest_url` が出ている。state は Namazu と同じ保存先バケットの別 key で独立させてある。
+**`firmware/src/secrets.h` も埋めてある**（WiFi・`kDeviceId`・HMAC 鍵・`kIngestUrl`。
+2号機の予定は無いので per-device 鍵は使わずフラット構成。→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）。
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
@@ -52,23 +53,23 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 ### 着手可能なタスク
 
-**次の一手は `env:record` を実機に焼いて確認することだ。** `firmware/src/secrets.h` に
-`kDeviceId`/`kIngestUrl`/`kHmacSecret` を埋めて焼く。見るのは3つ: **`fs` ロック後に
-`# goertzel armed` が出ること**（NTP で 600 秒以上かかる）、**バッチが `ingest` まで届き
-`series/` に着弾すること**、**`timebase_source=NTP`・`f_nominal_mhz=50000` で記録される
-こと**。**接続すると soak が積み直しになる**ので、着手する時に判断する
-（soak の主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md)
+**次の一手は `env:record` を実機に焼いて確認することだ。** `terraform apply` も
+`secrets.h` を埋めるのも済んでいる——**ただし `secrets.h`（と `terraform/terraform.tfvars`）は
+gitignore 対象なので worktree からは持ち出されない。本体の作業ツリーへ手でコピーすること**
+（→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）。
+見るのは3つ: **`fs` ロック後に `# goertzel armed` が出ること**（NTP で 600 秒以上かかる）、
+**バッチが `ingest` まで届き `series/` に着弾すること**、**`timebase_source=NTP`・
+`f_nominal_mhz=50000` で記録されること**。**接続すると soak が積み直しになる**ので、
+着手する時に判断する（soak の主要な問いは [log/2026-08-05-soak-first-day.md](docs/log/2026-08-05-soak-first-day.md)
 で片付いているので、止めて実地確認へ切り替えて構わない）。
 
 GNSS 受信機・アクティブアンテナは発注済みで到着待ち（→ [docs/progress.md](docs/progress.md)）。
 届いたら段階1の判定（捕捉衛星数・fix 安定性のログ取り）に進める。
 
-**`env:record` を実機に焼く前に、`terraform apply` が要る**（`ingest_url` が無いと
-送り先が無い）。`terraform.tfvars`（雛形は `terraform.tfvars.example`）に
-`hmac_secret` を埋め、**費用が生じる操作なので実行前にユーザーへ確認すること。**
-`apply` 後の出力 `ingest_url` を `secrets.h` の `kIngestUrl` へ転記する。
 detect・rollup・api・watchdog・CloudFront 用の terraform は対応する Lambda が
-まだ無いので書いていない（フェーズ8/9）。
+まだ無いので書いていない（フェーズ8/9）。**OTA は今はやらない**——開発中の
+USB挿し直しが面倒という声はあるが、着手するのは実際に苦になってからでよい
+（→ [docs/open-questions.md](docs/open-questions.md)「急がないがそのうちやりたいこと」）。
 
 ## 3. 絶対に破ってはいけない不変条件
 
