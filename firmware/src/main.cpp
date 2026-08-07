@@ -25,12 +25,19 @@
 // 出力は CSV。捕捉は tools/soak_capture.py を使え。
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
 #include <esp_timer.h>
 
+#include <atomic>
+
+#include "Goertzel.h"
+#include "GridFreqWire.h"
 #include "MeasuringSntp.h"
 #include "NtpTimebase.h"
+#include "TimeSync.h"
+#include "Uploader.h"
 #include "config.h"
 #include "secrets.h"
 
@@ -54,6 +61,20 @@ uint32_t gOverflows = 0;   // DMA 溢れの回数。**0 でなければ fs は�
 int32_t gLMin = 0, gLMax = 0, gRMin = 0, gRMax = 0;  // 報告ごとにリセットする
 bool gHaveMinMax = false;
 QueueHandle_t gI2sQueue = nullptr;
+
+// --- NAMZ_GRIDFREQ_RECORD 専用。他モードでは null のままで何も起きない ---
+//
+// pumpI2s() に直接組み込むのは、DMA吸い出しと同じ場所で L ch サンプルを
+// 一度だけ舐めるため（別バッファへコピーし直すコストを避ける）。
+// std::atomic にしてあるのは、Core0（fs がロックした瞬間に生成する）から
+// Core1（i2sTask で毎回読む）への書き込みをポインタ単位で安全に見せるため。
+std::atomic<gridfreq::GoertzelEstimator*> gRecordGoertzel{nullptr};
+struct WindowRecord {
+  uint64_t cyclesQ16;
+  bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
+};
+QueueHandle_t gWindowQueue = nullptr;
+bool gPendingDiscontinuity = false;  // gI2sMux で保護する
 
 struct I2sSnapshot {
   uint64_t frames;
@@ -127,7 +148,13 @@ void pumpI2s() {
     if (ev.type == I2S_EVENT_RX_Q_OVF) {
       portENTER_CRITICAL(&gI2sMux);
       ++gOverflows;
+      gPendingDiscontinuity = true;
       portEXIT_CRITICAL(&gI2sMux);
+      // 記録モードでは進行中の窓と「直前の位相」の参照を捨てる。
+      // **cyclesQ16 は巻き戻さない**——欠測区間をまたいだ分は
+      // GfrqFlagDiscontinuity で正直に申告する(→ Goertzel.h)。
+      gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
+      if (g != nullptr) g->resetWindow();
     }
   }
 
@@ -145,6 +172,24 @@ void pumpI2s() {
       if (l > lMax) lMax = l;
       if (r < rMin) rMin = r;
       if (r > rMax) rMax = r;
+
+      // 記録モードでのみ非null。他モードはロード1回ぶんのコストで済む。
+      gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
+      if (g != nullptr && g->addSample(l)) {
+        WindowRecord rec{};
+        rec.cyclesQ16 = g->cyclesQ16();
+        portENTER_CRITICAL(&gI2sMux);
+        rec.discontinuity = gPendingDiscontinuity;
+        gPendingDiscontinuity = false;
+        portEXIT_CRITICAL(&gI2sMux);
+        if (gWindowQueue != nullptr && xQueueSend(gWindowQueue, &rec, 0) != pdTRUE) {
+          // 送信側が詰まっていて空きが無い。**古い方を消す**——最新の窓を
+          // 失うより、少し前の1件を失う方がまだ実害が小さい。
+          WindowRecord discard;
+          xQueueReceive(gWindowQueue, &discard, 0);
+          xQueueSend(gWindowQueue, &rec, 0);
+        }
+      }
     }
 
     const uint64_t now = ticksNow();
@@ -247,7 +292,178 @@ void logLine(const char* server, bool ok, const char* err, const timebase::SntpS
 
 }  // namespace
 
-#ifdef NAMZ_GRIDFREQ_TEST
+#if defined(NAMZ_GRIDFREQ_RECORD)
+// NAMZ_GRIDFREQ_RECORD を定義してビルドすると、フェーズ2(PPS同時サンプリング)を
+// 待たずに実測・記録・送信を始める。**timebase_source は正直に NTP 品質(NtpTimebase)
+// と申告する**——PPS を名乗るのが嘘になる。Goertzelの計算自体はLチャンネルの
+// 生サンプルだけで完結し、PPS(方式A/B)の選択には一切触れないので、
+// C++移植をフェーズ2待ちにする理由が無いと判断した経緯は
+// docs/log/2026-08-07-goertzel-cpp-port.md にある。
+//
+// **測れなかった区間を測れたように見せない不変条件は、ここでも同じ形で守る**:
+// fs が NtpTimebase で規正できるまで(NtpTimebase::kMinSpanSeconds=600秒)は
+// Goertzel を起動しない。DMA が溢れたら該当バッチに
+// GfrqFlagDiscontinuity を立てる（→ pumpI2s() 内の resetWindow() 呼び出し）。
+
+namespace {
+
+Preferences gPrefs;
+uint32_t gSessionId = 0;
+double gFNominalHz = 0.0;  // 0 = 未判別
+Uploader* gUploader = nullptr;
+Batch* gCurrentBatch = nullptr;
+bool gBatchDiscontinuity = false;
+
+}  // namespace
+
+void setup() {
+  Serial.begin(kSerialBaud);
+  delay(500);
+  Serial.println();
+  Serial.println("# electabuzz gridfreq record (PPS待たず開始。timebase_source=NTP)");
+
+  gPrefs.begin("electabuzz", false);
+  gSessionId = gPrefs.getUInt("session_id", 0) + 1;
+  gPrefs.putUInt("session_id", gSessionId);
+  gPrefs.end();
+  Serial.printf("# session_id=%u\n", gSessionId);
+
+  ensureWifi();
+  timesync::begin(kNtpServers[0], kNtpServers[1],
+                   static_cast<uint64_t>(kTimeSyncStepThresholdSeconds) * 1000000ULL);
+
+  if (!startI2s()) {
+    Serial.println("# i2s init failed");
+    while (true) delay(1000);
+  }
+  Serial.printf("# i2s pins: mclk=%d bclk=%d lrck=%d din=%d\n", kI2sPinMclk, kI2sPinBclk,
+                kI2sPinLrck, kI2sPinData);
+
+  // --- 起動時の50/60Hz判別 ---
+  // 生サンプルをバッファに溜めてから判別、ではなく**2本のGoertzelを並走させて
+  // 窓の終わりに振幅を比べるだけ**にしてある。1秒窓ぶん(≈48000サンプル×4バイト
+  // ≈188KB)のバッファをPSRAM無しのSRAMに確保するのは避けたい
+  // （→ docs/hardware.md の「PSRAMは意図的に有効化しない」）。
+  // i2sTask を起動する前のこの1回だけは、ここで直接 i2s_read する
+  // （他に読み手がいないので競合しない）。
+  {
+    gridfreq::GoertzelEstimator det50(50.0, kFsNominalHz, 1.0);
+    gridfreq::GoertzelEstimator det60(60.0, kFsNominalHz, 1.0);
+    const size_t winN = det50.windowSamples();
+    size_t gotTotal = 0;
+    static int32_t buf[kI2sReadFrames * 2];
+    while (gotTotal < winN) {
+      size_t got = 0;
+      if (i2s_read(I2S_NUM_0, buf, sizeof(buf), &got, portMAX_DELAY) != ESP_OK) continue;
+      const size_t frames = got / (sizeof(int32_t) * 2);
+      for (size_t i = 0; i < frames && gotTotal < winN; ++i, ++gotTotal) {
+        const int32_t l = buf[i * 2] >> 8;
+        det50.addSample(l);
+        det60.addSample(l);
+      }
+    }
+    gFNominalHz = (det50.magnitude() >= det60.magnitude()) ? 50.0 : 60.0;
+    Serial.printf("# f_nominal detected: %.0fHz (mag50=%.0f mag60=%.0f)\n", gFNominalHz,
+                  det50.magnitude(), det60.magnitude());
+  }
+
+  xTaskCreatePinnedToCore(i2sTask, "i2s_pump", 4096, nullptr, 5, nullptr, 1);
+
+  gUploader = new Uploader(kIngestUrl, /*alertUrl=*/"", kHmacSecret, kDeviceId, kMaxRamBatches,
+                            kSpillDir, /*dropOldestWhenFull=*/true);
+  gUploader->begin();
+
+  Serial.println("# waiting for fs to lock via NTP (~600s)...");
+  gNextQueryMs = millis();
+}
+
+void loop() {
+  ensureWifi();
+  if (WiFi.status() != WL_CONNECTED) {
+    delay(kWifiRetryDelayMs);
+    return;
+  }
+
+  if (static_cast<int32_t>(millis() - gNextQueryMs) >= 0) {
+    const char* server = kNtpServers[gServerIndex];
+    gServerIndex = (gServerIndex + 1) % kNtpServerCount;
+
+    timebase::SntpSample s{};
+    const bool got = gSntp.query(server, kNtpTimeoutMs, s);
+    const I2sSnapshot i2s = takeI2sSnapshot();
+    const uint64_t frames = got ? framesAt(i2s, s.ticks) : i2s.frames;
+
+    static uint32_t seenOverflows = 0;
+    if (i2s.overflows != seenOverflows) {
+      Serial.printf("# i2s overflow (total=%u); fs regression reset\n", i2s.overflows);
+      gFs.reset();
+      seenOverflows = i2s.overflows;
+    }
+
+    if (got && i2s.atUs != 0) {
+      const uint64_t rttFrames = (s.rttTicks * kFsNominalHz) / 1000000ULL;
+      gFs.addObservation(frames, s.unixUs, rttFrames);
+    }
+    Serial.printf("# fs n=%u source=%s ppm=%.4f resid_ns=%u l_pp=%u r_pp=%u\n", gFs.obsCount(),
+                  gFs.source() == timebase::Source::kNtp ? "NTP" : "NOMINAL",
+                  ppmOf(gFs, kFsNominalMicroHz), gFs.residualNs(), i2s.lPp, i2s.rPp);
+
+    gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
+  }
+
+  // fs が NTP で規正できるまでは Goertzel を起動しない。
+  // **測れていない精度で「測れた」ように見せない。**
+  if (gRecordGoertzel.load(std::memory_order_relaxed) == nullptr) {
+    if (gFs.source() == timebase::Source::kNtp) {
+      auto* est = new gridfreq::GoertzelEstimator(
+          gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6, 1.0);
+      gWindowQueue = xQueueCreate(8, sizeof(WindowRecord));
+      gRecordGoertzel.store(est, std::memory_order_relaxed);
+      Serial.printf("# goertzel armed: f_nom=%.0f fs=%.6f obs=%u resid_ns=%u\n", gFNominalHz,
+                    static_cast<double>(gFs.fsMicroHz()) / 1e6, gFs.obsCount(),
+                    gFs.residualNs());
+    }
+    delay(50);
+    return;
+  }
+
+  WindowRecord rec;
+  while (gWindowQueue != nullptr && xQueueReceive(gWindowQueue, &rec, 0) == pdTRUE) {
+    if (gCurrentBatch == nullptr) {
+      gCurrentBatch = gridfreq::newBatch();
+      gCurrentBatch->begin(timesync::nowUs());
+    }
+    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
+    if (rec.discontinuity) gBatchDiscontinuity = true;
+
+    if (gCurrentBatch->isFull()) {
+      gridfreq::HeaderFields hf;
+      hf.device_id = kDeviceId;
+      hf.session_id = gSessionId;
+      hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
+      hf.fs_measured_uhz = gFs.fsMicroHz();
+      hf.tb_obs_count = gFs.obsCount();
+      hf.tb_residual_ns = gFs.residualNs();
+      hf.flags = gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0;
+      // **PPS が無いので堂々と NTP と申告する。** これが嘘にならない限り、
+      // フェーズ2を待たずに送り始めてよいという判断の前提そのものだ。
+      hf.timebase_source = kGfrqTbNtp;
+      hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
+      gridfreq::fillHeader(*gCurrentBatch, hf);
+
+      Serial.printf("# batch enqueue: records=%u flags=0x%04x ram=%u spill=%u\n",
+                    gCurrentBatch->recordCount(), hf.flags, gUploader->ramQueued(),
+                    gUploader->spillCount());
+      gUploader->enqueue(gCurrentBatch);
+      gCurrentBatch = nullptr;
+      gBatchDiscontinuity = false;
+    }
+  }
+
+  gUploader->pump();
+}
+
+#elif defined(NAMZ_GRIDFREQ_TEST)
 // NAMZ_GRIDFREQ_TEST を定義してビルドすると WiFi/NTP/fs回帰を一切行わず、
 // I2S の生サンプルを boxcar 平均で間引いてシリアルに吐くだけ
 // （tools/capture_serial.py 用・フェーズ1の疎通確認）。Namazu の NAMZ_SENSOR_TEST と
@@ -384,4 +600,4 @@ void loop() {
   gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
 }
 
-#endif  // NAMZ_GRIDFREQ_TEST
+#endif  // NAMZ_GRIDFREQ_RECORD / NAMZ_GRIDFREQ_TEST

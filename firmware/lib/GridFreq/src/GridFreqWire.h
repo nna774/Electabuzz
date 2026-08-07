@@ -1,7 +1,8 @@
 #pragma once
 // GFRQ ワイヤ形式を Batch に載せる薄い層。Namazu の lib/NamzWire と同じ役回り。
 //
-// Batch（batch-uplink v1.0.0）はレイアウトを知らない汎用バッファなので、
+// Batch（batch-uplink。pin している版は firmware/platformio.ini を見よ）は
+// レイアウトを知らない汎用バッファなので、
 // 「64バイトヘッダの中身」「12バイトレコードの並び」「crc32 の対象範囲」は
 // こちら側の責務になる。形式そのものの定義は WireFormat.h、
 // 仕様と判断理由は docs/wire-format.md にある。

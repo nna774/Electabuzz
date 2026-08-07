@@ -1,15 +1,23 @@
 # batch-uplink: 共通ライブラリの切り出し
 
-> **状態（2026-08-03）**: **切り出しは完了した。**
-> [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれ、
-> **Namazu も Electabuzz も同じ v1.0.0 を指す**。
-> 経緯は [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md)。
+> **状態（2026-08-07）**: **切り出しは完了し、以後 Namazu 側で6回タグを切っている。**
+> [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれた
+> のが最初で、**現在の pin は `v1.6.0`。Namazu も Electabuzz も同じタグを指す**のは変わらない。
+> `v1.1.0`〜`v1.6.0` はいずれも Namazu が OTA・リモート再起動・生存台帳表示のために追加した
+> もので、**全て `Uploader` の新規オプトイン引数(既定値で従来どおり)か新規メソッド**であり、
+> 呼び出し側を変えない限り Electabuzz の挙動は変わらない
+> （実例: `dropOldestWhenFull` は 2026-08-07 に Electabuzz が初めて使った引数だが、
+> 追加自体は Namazu が v1.1.0 で先に済ませていた）。**だから Electabuzz は都度 pin を
+> 上げてよく、Namazu の破壊的変更を待つ理由が無い。**
+> 最初の切り出しの経緯は [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md)、
+> Electabuzz が pin を v1.6.0 へ上げた経緯は
+> [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)。
 
 ```ini
-lib_deps = https://github.com/nna774/batch-uplink.git#v1.0.0
+lib_deps = https://github.com/nna774/batch-uplink.git#v1.6.0
 ```
 ```bash
-pip install "git+https://github.com/nna774/batch-uplink@v1.0.0"
+pip install "git+https://github.com/nna774/batch-uplink@v1.6.0"
 ```
 
 ## 実コードの調査結果: 流用境界
@@ -191,8 +199,11 @@ Electabuzz/                        ← 新規。周波数モニタ。batch-uplin
 (下記「ソース互換性」の節)。共通コードを変更すると、AWSスタックを分けていても
 **地震計のソースが動く**ので再ビルド・再検証の対象になってしまう。
 
-**タグで pin する独立レポならこれが消える。** 地震計は v1.0.0 に留まり続け、
-**この先** Electabuzz のために共通コードを変えてもソースレベルで一切影響しない。
+**タグで pin する独立レポならこれが消える。** 地震計は**自分の都合でしか** pin を動かさず、
+Electabuzz のために共通コードを変えてもソースレベルで一切影響しない
+（実際に v1.1.0〜v1.6.0 は全て Namazu 側の都合で切られた。**「地震計は v1.0.0 に留まり続ける」
+という当初の予想は外れたが、それでよい**——独立レポの価値は「片方の変更がもう片方の
+ソースを触らずに済む」ことであって、「バージョンが動かない」ことではない）。
 
 #### 切り出せる面は最初から綺麗に切れている (実測)
 
@@ -324,8 +335,11 @@ submodule の SHA は版として読めない。
 **検証は環境が揃っている側でやれ。** 「地震計を触らない」は目的ではなく、
 **壊さない**ための手段にすぎない。焼き直して確認できるなら触ってよい。
 
-**だから v1.1.0 は存在しない。** 両プロジェクトが同じ v1.0.0 を指す。
-次に共有レポへ手を入れるとき、初めて v1.1.0 を切る。
+**切り出し直後は v1.1.0 が存在しなかった。** 両プロジェクトが同じ v1.0.0 を指していた。
+**その後 Namazu が OTA 等のために v1.1.0〜v1.6.0 を切っており(全て後方互換の追加)、
+現在の pin は両プロジェクトとも v1.6.0。**「バージョンを分けない」という決定の意味は
+「Electabuzz 用に無理にタグを切らない」ことであって、「タグが増えない」ことではない
+——増やすべき側(実機とテストが揃っている Namazu)が増やすぶんには、この判断と矛盾しない。
 
 ### タグで pin しろ。ブランチ追従にするな
 
@@ -338,8 +352,8 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
 **結合が不可視**になる。「動いていたものが、何も変えていないのに再ビルドで壊れる」
 という最悪の壊れ方をする。
 
-- `lib_deps = ...git#v1.0.0` — **タグ**を指す
-- `requirements.txt` に `git+https://.../batch-uplink@v1.0.0` — **タグ**を指す
+- `lib_deps = ...git#v1.6.0` — **タグ**を指す
+- `requirements.txt` に `git+https://.../batch-uplink@v1.6.0` — **タグ**を指す
 - 共有レポ側で **タグを打ち替えない**(打ち替えたら pin の意味が消える)
 
 ---
@@ -352,8 +366,9 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
   Python は `auth`・`devices`・`notify`・`s3util`。**これ以上は入れるな。**
   ドメインが混ざった瞬間に共有ライブラリとしての価値が消える
   (`WireFormat.h` が入っていないのはこの原則どおりの帰結だ)
-- **`NamazuHaUrokoGaNai`**: `batch-uplink` v1.0.0 に pin。以後この pin を動かさない
-- **`Electabuzz`**: `batch-uplink` **v1.0.0** に pin。`lib/GridFreq/`(Goertzel + PPS規正)、
+- **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v1.6.0）。**自分の都合でしか動かさない**
+- **`Electabuzz`**: `batch-uplink` に pin（現在 v1.6.0。Namazu と同じタグを指す）。
+  `lib/GridFreq/`(GFRQワイヤ形式)、`lib/Goertzel/`(単一ビンDFT)、
   `wire_gridfreq`、`tools/gridfreq/`(参照実装 + backtest)、独立 Terraform state
 - **ワイヤ形式は `batch-uplink` に入れない。** `Batch` がレイアウト非依存になるので、
   ヘッダ定義・magic・`SensorType` 相当の enum はすべてプロジェクト固有になる。
