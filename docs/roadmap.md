@@ -76,8 +76,8 @@
    固定する後段の較正だけで、Goertzel本体はLチャンネルの生サンプルと`fs`だけで完結する
    という整理に基づく判断（→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)）。
    標準的な2次IIR再帰(状態2個)に置き換えてあり、`firmware/lib/Goertzel/test/run.sh`で
-   符号・振幅・高調波除去を検証済み。`NAMZ_GRIDFREQ_RECORD`ビルドモードで
-   `timebase_source=NTP`としてGFRQを実際に送るところまで実装したが**実機には未投入**
+   符号・振幅・高調波除去を検証済み。`NAMZ_GRIDFREQ_RECORD`ビルドモードを**実機に投入し、
+   `timebase_source=NTP`としてGFRQを実際に送れることを確認済み**
 4. ~~**`batch-uplink` を切り出して v1.0.0 を打つ**~~ **完了(2026-08-03)** —
    `Batch`(レイアウト非依存化済み)・`Uploader`/`HmacSha256`・`TimeSync`(C++)、
    `auth`・`devices`・`notify`・`s3util`(Python)。**一般化を Namazu の中で先に済ませてから
@@ -89,18 +89,23 @@
    64バイトヘッダを書き、`records()`/`recordsSize()` から `crc32` を埋める薄い層
    (`firmware/lib/GridFreq/`)。ヘッダは `static_assert` で寸法を固定してある。
    ハードウェア不要でホストの g++ でテストできる形で、フェーズ1〜3と並行して進めた
-6. **送信** — `Uploader` に無改造で通す。**コードは書けた**
-   (`NAMZ_GRIDFREQ_RECORD`ビルドモード。→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md))
-   が**実機には未投入**。実地確認では
-   **回線を意図的に数時間切り、復帰後に `series/` に穴がないことを S3 側で確認**すること
+6. ~~**送信**~~ **完了(2026-08-07)** — `Uploader` に無改造で通す。`NAMZ_GRIDFREQ_RECORD`
+   ビルドモードを実機に投入し、`series/`への着弾を確認済み
+   （→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。
+   **回線を意図的に数時間切り、復帰後に`series/`に穴がないことをS3側で確認する長時間試験は
+   まだ**（今回確認したのは単発の送信成功まで）
 7. ~~**`Electabuzz/terraform/` を新規に立てる（ingest分）**~~ **完了(2026-08-07)** —
    新バケット・IAMロール・Lambda・Function URL。state は Namazu と同じ保存先バケットの
    別key([versions.tf](../terraform/versions.tf))で独立。**`apply`済みで`ingest_url`が
    出ている**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。
-   **detect・rollup・api・watchdog・CloudFront はまだ**——対応する Lambda 本体が
-   無いので、先に terraform だけ書くと死んだリソース定義になる。
+   **detect・rollup・watchdog はまだ**——対応する Lambda 本体が無いので、
+   先に terraform だけ書くと死んだリソース定義になる。
    **NamazuHaUrokoGaNai の `terraform/` には一切 apply しない**
-8. **ダッシュボード** — 瞬時周波数・時刻偏差・PPS品質・欠測区間。rollup 層の切り替え
+8. ~~**ダッシュボード**~~ **v1 完了(2026-08-07)** — `lambda/api/`(`/recent`のみ)・
+   `dashboard/`(vanilla JS + Canvas、外部依存なし)・`terraform/dashboard.tf`
+   (S3 + CloudFront、カスタムドメイン無し)。**瞬時周波数**と**`timebase_source`等の
+   品質**を表示する。**時刻偏差・欠測区間・rollup層はまだ**——detect/rollupが無いので
+   イベント一覧・デバイス一覧タブも無い(→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md))
 9. **detect + 通知**、**バッテリー給電と停電時の挙動**
 
 > フェーズ4(切り出し)はハードウェアを必要としないので、**部品の到着を待つ間に

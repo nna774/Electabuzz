@@ -18,17 +18,21 @@ resource "aws_iam_role_policy_attachment" "logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# ingest が書くのは series/、CRC不一致時は bad/。両方とも同じバケットなので
-# バケット丸ごとに許可する（prefix を分けても IAM 側で縛る値打ちが薄い——
-# 書き先を間違えたら s3keys.py のバグであって、IAM が防げる種類の間違いではない）。
+# ingest/api で1ロールを共有する（Namazuと同じ構成）。ingest が書くのは series/、
+# CRC不一致時は bad/。api はダッシュボード向けに series/ を読む・列挙する。
+# prefix で権限を分けていない——書き先/読み先を間違えるのは s3keys.py や
+# store_gridfreq.py のバグであって、IAM が防げる種類の間違いではない。
 data "aws_iam_policy_document" "lambda" {
   statement {
     sid    = "S3Data"
     effect = "Allow"
     actions = [
       "s3:PutObject",
+      "s3:GetObject",
+      "s3:ListBucket",
     ]
     resources = [
+      aws_s3_bucket.data.arn,
       "${aws_s3_bucket.data.arn}/*",
     ]
   }
