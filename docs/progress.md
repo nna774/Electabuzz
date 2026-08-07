@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-07 | **Goertzel(単一ビンDFT)のPython参照実装を、フェーズ2(PPS同時サンプリング)を待たずに書いた。** `tools/gridfreq/goertzel.py`は`docs/signal-processing.md`の設計(z(k)=Σx[n]exp(-j2πf_nom n/fs)、位相unwrap、累積位相)をそのまま実装。`tools/gen_synthetic.py`(合成波形)と`tools/backtest_gridfreq.py`(検証)も新規。合成波形(高調波+ノイズ+現実的なドリフト)で±1mHz(`timebase.md`の目標精度)以内を確認、今日の実キャプチャに通すとゼロクロス法(std 304mHz)より桁違いに安定(std 17.8mHz)した。**Goertzel自体はPPSの取り込み方式(方式A/B)に依存しないという判断で、意図的に既存の「フェーズ2待ち」方針を上書きした。** C++移植・firmware組み込みは引き続き未着手 | [log/2026-08-07-goertzel-reference.md](log/2026-08-07-goertzel-reference.md) |
 | 2026-08-07 | **AFEの`Vcc/2`バイアス網は不要と確定した。** DMMでモジュール入力(node A)のDC電位を実測すると数mV(ほぼ0V)——モジュール側は外部パッドまで独自バイアスを引き出しておらず、チップ内部で自己バイアスできていると判断できる(同日確認した綺麗な50Hz波形・THD 0.0%とも整合)。**副産物として、OPアンプが必要だった2つの理由(急峻なフィルタ・低インピーダンスなバイアス供給)が両方消えた。** C1は当初案のSallen-Key(2次・要OPアンプ)ではなく、**受動1次RC(node A→GNDにコンデンサ1個、≈18nF、fc≈1.5kHz)で足りる見込み**——ただしまだ配線・実測はしていない机上の見立て。TVSは引き続き別枠の未確定事項 | [hardware.md](hardware.md) |
 | 2026-08-07 | **`NAMZ_GRIDFREQ_TEST`ビルドで50Hzの疎通を確認した。** `tools/capture_serial.py`/`tools/spectrum.py`(新規)でI2S生サンプルをFFT・ゼロクロス法で解析。基本波50.026Hz、THD 0.0%、ゼロクロス中央値49.934Hz(std 0.30Hz)——実配線から本物の50Hzが拾えていることを確認した。**タイムスタンプに壁時計(`ticksNow()`)を使うとDMAのバースト処理を実時刻と取り違えるバグがあり、フレームカウンタ起点の仮想時刻に直した。** また間引き幅48(実効1000Hz)ではC1未実装のノイズが89〜109Hz帯にエイリアシングして出たが、間引きを200(実効240Hz)に伸ばして無相関ノイズだけを`1/√N`で落としたら50Hzが勝った。`docs/roadmap.md`フェーズ1が完了した | [log/2026-08-07-gridfreq-test-mode.md](log/2026-08-07-gridfreq-test-mode.md) |
 | 2026-08-07 | **AFEを実配線してfsを実測し、リスク10（fsを駆動しているのは水晶かモジュール搭載の缶発振器か）を解消した。** `gXtal`(水晶ppm)と`gFs`(fs実測ppm)は一致しないが、差分が8点にわたり31.7〜32.9ppmとほぼ一定——`timebase.md`が予告していた「48kHzは160MHz系PLLの分数分周器で作られ、水晶とは無関係な数十ppmのずれが乗る」という予測と定量的に一致し、**差分が一定であること自体がESP32のMCLKがSCKIを駆動している証拠**になった。トランス接続直後は`l_pp`/`r_pp`がフルスケールに張り付いたが、DMM実測(約0.6VAC)とは整合しており、C1(LPF)未実装のハイインピーダンスノードが広帯域ノイズを拾っていただけと判断（R1=100kΩの電流制限設計により破壊リスクは無い）。`ovf`は全区間0で配線・DMAとも健全 | [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md) |
@@ -37,7 +38,7 @@
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
 | 未入手 | **アクティブアンテナ（未購入。GPS/GLONASS 両対応のものを買え。優先度最高）**、GNSS 受信機2台目（1台目は NEO-M8N を発注済み → [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**段階1の判定が出てから決める**）、AFE の C1 用コンデンサ(≈15〜22nF、E24)・TVS（**OPアンプは不要になった見込み**。→ [hardware.md](hardware.md)）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
 | 稼働中 | フェーズ1.5のsoakは2026-08-07時点で停止済み（水晶soakの一昼夜ぶんの結果は確保済み。→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。**代わりに実配線でのfs実測が完了し、リスク10を解消した**（→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)） |
-| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**で、v2 から **I2S を回して `fs` も同時に測る**（位相推定も送信もまだ無い）。**`NAMZ_GRIDFREQ_TEST`ビルド(`env:gridfreqtest`)で疎通確認用の生サンプルダンプも書けた**（`tools/capture_serial.py`/`tools/spectrum.py`。位相推定=Goertzelの代わりではない）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
+| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。`firmware/src/main.cpp` は**フェーズ1.5 の soak 専用**で、v2 から **I2S を回して `fs` も同時に測る**（位相推定も送信もまだ無い）。**`NAMZ_GRIDFREQ_TEST`ビルド(`env:gridfreqtest`)で疎通確認用の生サンプルダンプも書けた**（`tools/capture_serial.py`/`tools/spectrum.py`。位相推定=Goertzelの代わりではない）。**Goertzelのpython参照実装は`tools/gridfreq/goertzel.py`にある**（`tools/backtest_gridfreq.py`で検証。C++移植はまだ）。**クラウド側は `lambda/ingest/handler.py` + `lambda/s3keys.py`**（`/alert` は未実装。`terraform/` も未着手） |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.0.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`） |
 
 ### 着手可能なタスク
@@ -70,8 +71,11 @@
 
 ### まだ触っていない領域
 
-`tools/gridfreq/` の Python 参照実装、`lib/GridFreq/` の**位相推定側**（単一ビンDFT +
-PPS規正。ワイヤ層だけが在る）、`terraform/`。**すべてフェーズ2（PPS同時サンプリング）が
-通ってからでよい。** そこが成否の分岐点なので、先に作り込んでも無駄になりうる。
+`lib/GridFreq/` の**位相推定側(C++実装)**（単一ビンDFT + PPS規正。ワイヤ層だけが在る）、
+`terraform/`。**Python参照実装(`tools/gridfreq/`)は2026-08-07にフェーズ2を待たずに
+着手し、完了した**（→ [log/2026-08-07-goertzel-reference.md](log/2026-08-07-goertzel-reference.md)。
+理由: Goertzel自体はLチャンネルの生サンプルだけで完結する計算で、PPSをどう絶対時刻に
+固定するか(方式A/Bの選択)には依存しないと判断したため）。**C++移植とfirmware組み込み
+(GFRQ送信)は引き続きフェーズ2待ち**——ここは方式A/Bの選択が構造に効く可能性がある。
 
 未決の問いは [open-questions.md](open-questions.md) にある。
