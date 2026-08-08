@@ -156,6 +156,35 @@ int main() {
     checkNear("大きなティック起点でも ppm を復元する", got, ppm, 0.05);
   }
 
+  // --- 8. unixUsAt が回帰の逆関数として絶対時刻を復元する ---
+  // → バッチ境界の針ノイズ対策（docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
+  // バッチ内のレコード間隔(fsMicroHz)とバッチ起点(unixUsAt)が同じ回帰から出るなら、
+  // 両者の間に構造的なズレは原理的に生まれない。
+  {
+    Lcg rng;
+    timebase::NtpTimebase tb(kNominalUHz);
+    feed(tb, 37.5, 60, 64, 0.0, rng);  // ノイズ無し・64秒間隔・約1時間
+    check("usable", tb.usable());
+
+    // feed() の内部と同じ起点定数（ticks0=123456789, unix0=1750000000000000）。
+    const uint64_t ticks0 = 123456789ULL;
+    const uint64_t unix0 = 1750000000000000ULL;
+    checkNear("起点そのものを復元する", static_cast<double>(tb.unixUsAt(ticks0)),
+              static_cast<double>(unix0), 1000.0);  // 1ms 以内
+
+    // 実ppmで100秒進んだ時点のticksを逆算し、対応する絶対時刻が+100秒になっているか。
+    const double ppm = 37.5;
+    const double dtSec = 100.0;
+    const uint64_t ticksAt100s =
+        ticks0 + static_cast<uint64_t>(kNominalHz * (1.0 + ppm * 1e-6) * dtSec + 0.5);
+    const double gotUs = static_cast<double>(tb.unixUsAt(ticksAt100s));
+    checkNear("100秒後のticksは100秒後の絶対時刻に写る", gotUs,
+              static_cast<double>(unix0) + dtSec * 1e6, 1000.0);  // 1ms 以内
+
+    check("未規正(usable=false)では0を返す",
+          timebase::NtpTimebase(kNominalUHz).unixUsAt(ticks0) == 0);
+  }
+
   printf("\n%s (%d failures)\n", gFailures ? "FAILED" : "PASSED", gFailures);
   return gFailures ? 1 : 0;
 }

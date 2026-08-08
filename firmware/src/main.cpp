@@ -71,6 +71,12 @@ QueueHandle_t gI2sQueue = nullptr;
 std::atomic<gridfreq::GoertzelEstimator*> gRecordGoertzel{nullptr};
 struct WindowRecord {
   uint64_t cyclesQ16;
+  // この窓が完成した**瞬間**の累積フレーム数（gFrames）。pumpI2s() が確定させる。
+  // **Core0 が xQueueReceive で受け取った時刻を使ってはいけない**——NTP問い合わせ
+  // (gSntp.query()、最大 kNtpTimeoutMs ブロックしうる)等で loop() が遅延すると、
+  // その遅延がそのままバッチ起点のタイムスタンプに乗ってしまう
+  // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md の再発版）。
+  uint64_t framesAtEnd;
   bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
 };
 QueueHandle_t gWindowQueue = nullptr;
@@ -163,6 +169,12 @@ void pumpI2s() {
     if (i2s_read(I2S_NUM_0, buf, sizeof(buf), &got, 0) != ESP_OK || got == 0) return;
     const size_t frames = got / (sizeof(int32_t) * 2);
 
+    // この read で埋まる分の gFrames はまだ加算していない。
+    // **gFrames の書き手は pumpI2s()（Core1）だけ**なのでロック無しで読んでよい
+    // （他コアからの書き込みは無い。ロックが要るのは読み手側の takeI2sSnapshot()
+    // ／currentFramesEstimate() が torn read を避けるためだけ）。
+    const uint64_t framesBeforeThisRead = gFrames;
+
     // 24bit が 32bit 枠に MSB 詰めで来る（I2S 標準フォーマット）。算術シフトで戻す。
     int32_t lMin = INT32_MAX, lMax = INT32_MIN, rMin = INT32_MAX, rMax = INT32_MIN;
     for (size_t i = 0; i < frames; ++i) {
@@ -178,6 +190,9 @@ void pumpI2s() {
       if (g != nullptr && g->addSample(l)) {
         WindowRecord rec{};
         rec.cyclesQ16 = g->cyclesQ16();
+        // **窓が完成した「その瞬間」のフレーム数。** Core0 がこのレコードを
+        // xQueueReceive するまでの遅延（NTP問い合わせ等）に一切依存しない。
+        rec.framesAtEnd = framesBeforeThisRead + i + 1;
         portENTER_CRITICAL(&gI2sMux);
         rec.discontinuity = gPendingDiscontinuity;
         gPendingDiscontinuity = false;
@@ -461,7 +476,24 @@ void loop() {
   while (gWindowQueue != nullptr && xQueueReceive(gWindowQueue, &rec, 0) == pdTRUE) {
     if (gCurrentBatch == nullptr) {
       gCurrentBatch = gridfreq::newBatch();
-      gCurrentBatch->begin(timesync::nowUs());
+      // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
+      // 起点もここから取れば同じ時刻源で揃う。**timesync(粗いSMOOTH SNTP壁時計)を
+      // 都度読み直すと、そちらの補正ジッタがバッチ境界にだけ乗ってしまう**
+      // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
+      //
+      // **「今」ではなく rec.framesAtEnd を使う。** xQueueReceive した時刻(=このループを
+      // 回している瞬間)を使うと、gSntp.query()（最大 kNtpTimeoutMs ブロックしうる）で
+      // loop() が詰まった分がそのままバッチ起点のズレになって再発する
+      // （実機検証で発覚。NTP問い合わせのたびに境界dtが乱れていた）。
+      // rec.framesAtEnd は Core1 が窓の完成した瞬間に確定させた値なので、
+      // Core0 側の処理遅延に一切左右されない。
+      //
+      // gFs が(オーバーフロー直後などで)一時的に未規正に戻っていたら、
+      // 従来通り timesync にフォールバックする。
+      const uint64_t batchStartUs = gFs.source() == timebase::Source::kNtp
+                                         ? gFs.unixUsAt(rec.framesAtEnd)
+                                         : timesync::nowUs();
+      gCurrentBatch->begin(batchStartUs);
     }
     gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
     if (rec.discontinuity) gBatchDiscontinuity = true;
