@@ -125,6 +125,18 @@ uint32_t NtpTimebase::residualNs() const {
   return saturate(sigmaSlope / fsHz * 1e9);
 }
 
+uint64_t NtpTimebase::unixUsAt(uint64_t ticks) const {
+  // **fsMicroHz() と同じ回帰式の逆関数。** 回帰は y = ticks - ticks0_ - nominalHz_*x
+  // (x = 経過秒) を x に最小二乗で当てているので、fsHz = nominalHz_ + cxy_/cxx_ を使うと
+  // ticks - ticks0_ ≈ fsHz * x → x ≈ (ticks - ticks0_) / fsHz で経過秒が復元できる。
+  if (!usable()) return 0;
+  const double fsHz = nominalHz_ + cxy_ / cxx_;
+  if (!(fsHz > 0.0)) return 0;
+  const double x = (static_cast<double>(ticks) - static_cast<double>(ticks0_)) / fsHz;
+  const double unixUs = static_cast<double>(unixUs0_) + x * 1e6;
+  return unixUs > 0.0 ? static_cast<uint64_t>(unixUs + 0.5) : 0;
+}
+
 uint32_t NtpTimebase::fitRmsNs() const {
   if (n_ < 3 || !(cxx_ > 0.0)) return 0;
   const double s2 = residualSumSquares() / static_cast<double>(n_ - 2);

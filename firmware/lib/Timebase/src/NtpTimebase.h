@@ -68,6 +68,14 @@ class NtpTimebase final : public TimebaseEstimator {
   uint32_t obsCount() const override { return n_; }
   Source source() const override { return usable() ? Source::kNtp : Source::kNominal; }
 
+  // 任意の ticks に対応する絶対 UNIX 時刻[µs]を回帰から逆算する。
+  // fsMicroHz() と同じ回帰(ticks0_/unixUs0_ + 傾き)を使うので、**バッチ内のレコード
+  // 間隔と同じ時刻源でバッチの起点を打てる**ようになる（→ 針ノイズの根本原因の対策。
+  // docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
+  // usable() が false のうちは 0 を返す。呼び出し側で source() == kNtp を確認してから
+  // 使うこと（未規正の回帰を絶対時刻として申告しない、という不変条件はここでも守る）。
+  uint64_t unixUsAt(uint64_t ticks) const;
+
   // --- 以下はログ・診断用。ワイヤ形式には載らない ---
 
   // 採用に足る観測が溜まったか。
