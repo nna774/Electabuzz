@@ -339,6 +339,24 @@ bool gBatchDiscontinuity = false;
 // 再ロック時にまた作り直しが起きるだけでよい。
 bool gFsSourceWasNtp = false;
 
+// NOMINAL区間のバッチ起点計算用アンカー。**timesync::isSynced()が初めてtrueに
+// なった瞬間に遅延取得する**(0 = 未取得)。setup()の時点で無条件に読むと、
+// SNTPの初回同期がまだ済んでいない場合(実測で発生した——WiFi接続直後は
+// timesync::nowUs()が1970年付近を返す)、その悪い値がセッション全体に固定
+// されてしまう。遅延取得なら、初回同期が済むまでの数バッチだけ悪い値が出て
+// (旧来のtimesync都度読みと同程度の影響に留まる)、以後は良いアンカーで
+// 一貫する。gNominalAnchorFramesは対応する時点のrec.framesAtEnd。
+// **以後はこのアンカー+公称fsによる外挿だけでバッチ起点を計算し、
+// timesync::nowUs() を都度読み直さない**——都度読み直すとSNTPのslew補正
+// ジッタ(数ms級)がバッチ境界のたびに乗り、freq=Δcycles/Δtの計算がそれを
+// 増幅して数十〜100mHz級の針として現れる(NTPロック済み区間をunixUsAt()化
+// した際と同じ理屈。gFsの回帰にはNOMINAL中使える代物が無いので、代わりに
+// 「公称fsそのものを固定レート源として使う」)。
+// 絶対時刻としての確度は主張しない(NOMINALはそもそも未規正)。効くのは
+// **同一アンカーからの一貫した外挿によりバッチ境界の相対時間が正確になること**だけ。
+uint64_t gNominalAnchorUnixUs = 0;  // 0 = 未取得
+uint64_t gNominalAnchorFrames = 0;  // アンカー取得時点のrec.framesAtEnd
+
 }  // namespace
 
 void setup() {
@@ -488,11 +506,34 @@ void loop() {
       // rec.framesAtEnd は Core1 が窓の完成した瞬間に確定させた値なので、
       // Core0 側の処理遅延に一切左右されない。
       //
-      // gFs が(オーバーフロー直後などで)一時的に未規正に戻っていたら、
-      // 従来通り timesync にフォールバックする。
-      const uint64_t batchStartUs = gFs.source() == timebase::Source::kNtp
-                                         ? gFs.unixUsAt(rec.framesAtEnd)
-                                         : timesync::nowUs();
+      // gFs が未規正(NOMINAL)の間は、timesync::nowUs() を都度読み直す代わりに
+      // gNominalAnchorUnixUs(SNTP初回同期の直後に一度だけ固定)から公称fsで外挿する。
+      // **NOMINAL中はSNTPのslew補正ジッタ(数ms級)がバッチ境界のたびに乗り、
+      // freq=Δcycles/Δtの計算がそれを増幅して〜100mHz級の針になっていた**
+      // (実機検証で発覚。NTP問い合わせループとは無関係にNOMINAL区間だけで再現した)。
+      // 絶対時刻としての確度はNOMINALなので元々主張しない——効くのは
+      // 「同一アンカーからの一貫した外挿でバッチ境界の相対時間が正確になる」ことだけ。
+      //
+      // **アンカーは遅延取得する。** setup()で無条件に読むと、SNTPの初回同期が
+      // まだの場合(実機でWiFi不調により発生した)、timesync::nowUs()が1970年
+      // 付近を返し、その悪い値がセッション全体に固定されてしまう。
+      // timesync::isSynced()がtrueになった最初のバッチでだけ取り直すことで、
+      // 悪い影響を「同期が済むまでの数バッチ」に限定する(旧来のtimesync都度読みと
+      // 同程度の影響で、以後は良いアンカーに揃う)。
+      if (gNominalAnchorUnixUs == 0 && timesync::isSynced()) {
+        gNominalAnchorUnixUs = timesync::nowUs();
+        gNominalAnchorFrames = rec.framesAtEnd;
+      }
+      const uint64_t batchStartUs =
+          gFs.source() == timebase::Source::kNtp
+              ? gFs.unixUsAt(rec.framesAtEnd)
+          : gNominalAnchorUnixUs != 0
+              ? gNominalAnchorUnixUs +
+                    static_cast<uint64_t>(static_cast<double>(rec.framesAtEnd -
+                                                                gNominalAnchorFrames) /
+                                               static_cast<double>(kFsNominalHz) * 1e6 +
+                                           0.5)
+              : timesync::nowUs();
       gCurrentBatch->begin(batchStartUs);
     }
     gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
