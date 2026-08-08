@@ -170,6 +170,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initApiSettings();
   document.getElementById('minutes').addEventListener('change', refresh);
   document.getElementById('autorefresh').addEventListener('change', scheduleAutoRefresh);
+  document.getElementById('refresh-now').addEventListener('click', refresh);
   window.addEventListener('resize', () => refresh());
   refresh();
   scheduleAutoRefresh();
