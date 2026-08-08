@@ -44,8 +44,6 @@ function drawFreqChart(cv, series) {
   ctx.clearRect(0, 0, w, h);
 
   const n = series.t_us.length;
-  const plotW = w - PAD * 2;
-  const plotH = h - PAD * 2;
 
   if (n === 0) {
     ctx.fillStyle = fg;
@@ -63,28 +61,43 @@ function drawFreqChart(cv, series) {
     dev = Math.max(dev, Math.abs(f - fNom) * 1.15);
   }
   const yMin = fNom - dev, yMax = fNom + dev;
+  const yMaxLabel = yMax.toFixed(3) + 'Hz';
+  const yMinLabel = yMin.toFixed(3) + 'Hz';
+  const fNomLabel = fNom.toFixed(0) + 'Hz';
 
-  const x = (t) => PAD + ((t - t0) / (t1 - t0 || 1)) * plotW;
+  // 左余白は目盛ラベルの実測幅から決める(固定PADだと桁数次第で先頭が
+  // canvas外にはみ出して欠ける)。
+  ctx.font = '11px system-ui, sans-serif';
+  const labelW = Math.max(
+    ctx.measureText(yMaxLabel).width,
+    ctx.measureText(yMinLabel).width,
+    ctx.measureText(fNomLabel).width
+  );
+  const padLeft = Math.max(PAD, labelW + 12);
+  const plotW = w - padLeft - PAD;
+  const plotH = h - PAD * 2;
+
+  const x = (t) => padLeft + ((t - t0) / (t1 - t0 || 1)) * plotW;
   const y = (f) => PAD + (1 - (f - yMin) / (yMax - yMin || 1)) * plotH;
 
   // 軸・公称値の破線
   ctx.strokeStyle = line;
   ctx.lineWidth = 1;
-  ctx.strokeRect(PAD, PAD, plotW, plotH);
+  ctx.strokeRect(padLeft, PAD, plotW, plotH);
   ctx.save();
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
-  ctx.moveTo(PAD, y(fNom));
-  ctx.lineTo(PAD + plotW, y(fNom));
+  ctx.moveTo(padLeft, y(fNom));
+  ctx.lineTo(padLeft + plotW, y(fNom));
   ctx.stroke();
   ctx.restore();
 
   ctx.fillStyle = fg;
   ctx.font = '11px system-ui, sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText(yMax.toFixed(3) + 'Hz', PAD - 4, PAD + 4);
-  ctx.fillText(yMin.toFixed(3) + 'Hz', PAD - 4, PAD + plotH);
-  ctx.fillText(fNom.toFixed(0) + 'Hz', PAD - 4, y(fNom) + 4);
+  ctx.fillText(yMaxLabel, padLeft - 4, PAD + 4);
+  ctx.fillText(yMinLabel, padLeft - 4, PAD + plotH);
+  ctx.fillText(fNomLabel, padLeft - 4, y(fNom) + 4);
   ctx.textAlign = 'left';
 
   // 周波数の折れ線。null(欠測・不連続)をまたぐところは線をつながない。
