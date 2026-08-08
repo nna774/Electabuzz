@@ -34,6 +34,16 @@ pip install "git+https://github.com/nna774/batch-uplink@v1.6.0"
 | [lambda/common/devices.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/devices.py) + watchdog | `record_batch()` はセンサ種別に依存しない。死活監視が device_id 追加だけで効く |
 | [lambda/common/notify.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/notify.py) | `Notifier` 抽象と Slack 実装。通知先は全て env 駆動。**`events.py` は切り出さない**(下記) |
 
+**Electabuzzでもspool/retry機構は無改造でそのまま効いている**（`firmware/platformio.ini`で
+`batch-uplink.git#v1.6.0`をpinし、`firmware/src/main.cpp`で`Uploader`を生成・`enqueue()`/
+`pump()`を呼ぶだけ。独自実装は無い）。**保持できる期間はNamazuより長い**（概算、実機未検証）。
+`firmware/platformio.ini`は`board_build.partitions = default_16MB.csv`（Arduino既定の
+16MB分割）を使っており、spiffs領域は`0x360000`＝約3.375MB。GFRQは64Bヘッダ+12B×30レコード
+＝424バイトを30秒間隔で送る(≈14.1B/s)ので、**3.375MB ÷ 14.1B/s ≈ 69.6時間（約2.9日）**
+ぶん退避できる計算になる。Namazuが168.8分（16MBへ拡張後）で済んでいるのは加速度計の
+データレートが87倍(≈1229B/s)高いためで、Electabuzzは独自にpartition tableを切らずとも
+既定のままで長時間の退避が効く。
+
 **ただし `Uploader` のうち速報経路 `sendAlert()` だけは地震に染まっていた**
 (`realtime_intensity` / `peak_gal` / `kind:"device_prompt"` がベタ書き)。v1.0.0 では剥がしてあり、
 **本文は呼び出し側が組む**。
