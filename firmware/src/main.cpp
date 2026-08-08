@@ -247,6 +247,18 @@ uint64_t framesAt(const I2sSnapshot& s, uint64_t atUs) {
   return v > 0 ? static_cast<uint64_t>(v) : 0;
 }
 
+// takeI2sSnapshot() と違い振幅ピークをリセットしない読み取り専用版。
+// バッチ起点の時刻計算のためだけに「今のフレーム数」を覗きたい箇所で使う
+// （NTP問い合わせ間隔の外から呼ぶので、あちらの副作用に巻き込みたくない）。
+uint64_t currentFramesEstimate() {
+  I2sSnapshot s{};
+  portENTER_CRITICAL(&gI2sMux);
+  s.frames = gFrames;
+  s.atUs = gFramesAtUs;
+  portEXIT_CRITICAL(&gI2sMux);
+  return framesAt(s, ticksNow());
+}
+
 double ppmOf(const timebase::NtpTimebase& tb, uint64_t nominalMicroHz) {
   return (static_cast<double>(tb.fsMicroHz()) / static_cast<double>(nominalMicroHz) - 1.0) * 1e6;
 }
@@ -431,7 +443,16 @@ void loop() {
   while (gWindowQueue != nullptr && xQueueReceive(gWindowQueue, &rec, 0) == pdTRUE) {
     if (gCurrentBatch == nullptr) {
       gCurrentBatch = gridfreq::newBatch();
-      gCurrentBatch->begin(timesync::nowUs());
+      // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
+      // 起点もここから取れば同じ時刻源で揃う。**timesync(粗いSMOOTH SNTP壁時計)を
+      // 都度読み直すと、そちらの補正ジッタがバッチ境界にだけ乗ってしまう**
+      // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
+      // gFs が(オーバーフロー直後などで)一時的に未規正に戻っていたら、
+      // 従来通り timesync にフォールバックする。
+      const uint64_t batchStartUs = gFs.source() == timebase::Source::kNtp
+                                         ? gFs.unixUsAt(currentFramesEstimate())
+                                         : timesync::nowUs();
+      gCurrentBatch->begin(batchStartUs);
     }
     gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
     if (rec.discontinuity) gBatchDiscontinuity = true;
