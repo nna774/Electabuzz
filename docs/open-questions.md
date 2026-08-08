@@ -23,7 +23,13 @@
 | **`v_rms_mv` の基準点** | **商用の 100V は mV では u16 に収まらない**（最大 65.535V）。トランス二次側の実効値[mV]なら 10.5V ≒ `10500` で収まる。二次側の値を持つか、壁側に換算して単位を変える（10mV 刻み等）か。**AFE 分圧抵抗は R1=100kΩ/R2=6.8kΩ に確定済み**（→ [hardware.md](hardware.md)）。レコードを1バイトも記録していない今なら変更が無料で、記録開始後は高くつく。→ [wire-format.md](wire-format.md) |
 | **レコードの `flags`** | ビットを1つも割り当てていない。**何を品質として立てるかは位相推定の実装が決める**ので、それが在るまで決めない（今決めるのは「存在しない要件への一般化」）。フィールドは確保済み。→ [wire-format.md](wire-format.md) |
 
-**バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-08、firmware側で修正・実機確認待ち。`NtpTimebase::unixUsAt()`でバッチ起点をバッチ内レコード間隔と同じ回帰から取るよう変更した)。→ [risks.md](risks.md)リスク12、[log/2026-08-08-batch-start-unified-timebase.md](log/2026-08-08-batch-start-unified-timebase.md)
+**バッチ境界のタイムスタンプジャンプの直し方**はまだ片付いていない。2026-08-08に
+firmware側で2回修正した(`unixUsAt()`でバッチ起点を`gFs`回帰に統一→`framesAtEnd`で
+Core0の処理遅延を排除)が、**2026-08-09のpowerk95外部照合で3つ目の原因が判明した**——
+`NtpTimebase::unixUsAt()`の回帰係数がNTP観測1点ごとに更新され、同じ`ticks`への出力が
+不連続にシフトする。firmware側で回帰係数を凍結するか、API側のdt許容を締めるかの
+判断がまだ残っている。→ [risks.md](risks.md)リスク12、
+[log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)
 
 ## 購入時に確認すること
 

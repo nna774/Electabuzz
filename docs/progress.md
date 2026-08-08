@@ -5,6 +5,8 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-09 | **バッチ境界の針ノイズ、2回目の修正(`framesAtEnd`化)でも解消していないと外部照合で判明した。** `tb_obs_count`(NTP観測の累積数)が増加した直後のバッチで例外なくdtジャンプが起きているパターンを実データ(5/5件)で確認。原因は`NtpTimebase::unixUsAt()`が使う回帰係数(`fsHz`)がNTP観測1点ごとに更新され、同じ`ticks`に対する出力が観測追加の前後で不連続にシフトすること——Core0の処理遅延(2回目の修正が対応)とは別の、回帰再計算そのものに内在する不連続性。`open-questions.md`の「片付いた」表記を撤回し、`risks.md`リスク12を更新した。**未修正のまま記録** | [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md) |
+| 2026-08-09 | **powerk95(先行実装)との外部照合を初めて実施し、相関0.993を確認した。** `/recent`(Electabuzz)とpowerk95 50Hzページのグラフ内データ(手動CSV DL)をJST秒で突き合わせ、共通1788点で相関係数0.993・平均差-1.0mHz・標準偏差4.7mHzを得た。周波数変動の「形」が一致することを実データで確認——`verification.md`の外部照合(補助)を初めて実施した回。残差の外れ値5点を精査したところ別の発見(下記バッチ境界ジャンプ)に繋がった | [log/2026-08-09-powerk95-external-verification.md](log/2026-08-09-powerk95-external-verification.md) |
 | 2026-08-08 | **PR #14(バッチ境界の針ノイズ修正)とmainでコンフリクトし、マージして再投入した。** 真の衝突は`docs/progress.md`(索引テーブルの行追加同士)と`firmware/src/main.cpp`のみで、後者は`loop()`内の互いに独立した箇所(NOMINAL→NTP遷移検出 vs バッチ起点の`framesAtEnd`化)だったため3-wayマージが自動で成立した。マージ後、firmware全テスト・3ビルド環境・lambda 47テストを再確認し、`terraform apply`と実機書き込みを再実行して両方の修正が同居して正常に動くことを確認した(`session_id=10`) | [log/2026-08-08-nominal-window-merge-redeploy.md](log/2026-08-08-nominal-window-merge-redeploy.md) |
 | 2026-08-08 | **NOMINAL区間の対処(案A)を実機・実クラウドへ投入した。** `terraform apply`(0 add/2 change/0 destroy、api+ingestのコードのみ更新)、実機書き込み(`pio run -e record -t upload`、USBシリアルはVID:PID(1A86:55D3=CH343)で本機と確認)。起動ログで**設計どおり起動直後から記録が始まる**ことを確認した(`# recording started immediately (timebase_source=NOMINAL)...`)。NOMINAL→NTPの遷移を跨ぐ実データでの確認(約600秒後)はこれから | [log/2026-08-08-nominal-window-deploy.md](log/2026-08-08-nominal-window-deploy.md) |
 | 2026-08-08 | **NOMINAL区間の対処(案A)をfirmware・lambda・dashboardの3層に実装した。** `env:record`はNTPロックを待たず起動直後から`timebase_source=NOMINAL`で記録・送信し、ロックした瞬間に規正済み`fs`で`GoertzelEstimator`を作り直す(`initialCyclesQ16`引数を追加して絶対累積位相の連続性を保った)。`lambda/api/handler.py`にセッション単位の補正係数(`locked_fs/nominal_fs`)を求める`_session_fs_corrections()`を追加し、`freq_hz_corrected`と各点の`timebase_source`をレスポンスに足した。`dashboard/app.js`はNOMINAL区間を点線、補正到着後の予測値をアンバーの破線で重ねて描く。firmwareの全テスト・3ビルド環境、lambdaの47テスト全緑。ローカルサーバ+ブラウザで合成データによる描画確認済み。**実機・実クラウドへの投入(`terraform apply`・実機書き込み)はまだ** | [log/2026-08-08-nominal-window-implementation.md](log/2026-08-08-nominal-window-implementation.md) |
@@ -107,11 +109,13 @@
 - ~~**AFEのC1(LPF)を実装・確定する**~~ **済み**（2026-08-08。15nFを実装、
   `env:gridfreqtest`での再測定でクリッピング消失・THD 0.0%維持を確認。
   → [log/2026-08-08-c1-lpf-verification.md](log/2026-08-08-c1-lpf-verification.md)）
-- ~~**バッチ境界の針ノイズを直す**~~ **firmware修正・実機投入済み**（2026-08-08。
-  `NtpTimebase::unixUsAt()`でバッチ起点を`gFs`回帰へ統一(1回目)、それでも
-  NTP問い合わせ中の`loop()`遅延で再発したため`WindowRecord::framesAtEnd`
-  (窓完成の瞬間のフレーム数)を追加してCore0の処理遅延を経路から排除(2回目)。
-  **NTP問い合わせを複数回またぐ実機確認はこれから**。
+- **バッチ境界の針ノイズ、未解決（2026-08-09時点）。** `NtpTimebase::unixUsAt()`で
+  バッチ起点を`gFs`回帰へ統一(1回目)、`WindowRecord::framesAtEnd`でCore0の処理遅延を
+  排除(2回目)。**しかし外部照合(powerk95)で3つ目の原因が判明**——NTP観測1点ごとに
+  回帰係数`fsHz`が更新され、同じ`ticks`への`unixUsAt()`出力が観測追加の前後で
+  不連続にシフトする。2回の既存修正はどちらもこれに対応していない。対策は
+  「バッチ起点計算の回帰係数を凍結する」か「API側のdt許容を締める」の2方向、まだ未実装。
+  → [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)
   → [log/2026-08-08-batch-start-frame-capture-time.md](log/2026-08-08-batch-start-frame-capture-time.md)）
 
 ### まだ触っていない領域
