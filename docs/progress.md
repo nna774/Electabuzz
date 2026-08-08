@@ -6,7 +6,12 @@
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
 | 2026-08-09 | **バッチ境界の針ノイズ(NTPロック済み区間側)を2段構えで対策した。** firmware側で`NtpTimebase`の回帰原点をロールフォワードする対策を実装したが、A/Bテストで効果は約30%縮小に留まると判明(根絶ではなく緩和)。決定打はAPI側——`lambda/api/handler.py`の周波数計算を、ジッタを含む実測dtではなく`record_rate_mhz`由来の理論値で割るよう変更したところ、実データ(261境界)で異常16件→0件、powerk95外部照合でも相関0.989→0.9996・最大絶対差244mHz→5mHzまで改善した。firmware全テスト・3ビルド環境・lambda 48テスト全緑。実機投入・mainとのマージはまだ | [log/2026-08-09-batch-boundary-jump-ntp-fix.md](log/2026-08-09-batch-boundary-jump-ntp-fix.md) |
+| 2026-08-09 | **緊急再起動ボタンを「対応ハードウェア無し」から「BOOTボタン(GPIO0)が使える可能性あり、現物確認待ち」に判断を修正した。** 直前の棚卸しでNamazu固有機能として見送ったが、ユーザーから母艦にもボタンが付いていると指摘を受けた。母艦(ESP32-S3-WROOM-1 N16R8)のDevKitC系ボードはBOOT/RSTの2ボタンが定番で、GPIO0はElectabuzzのI2S配線(GPIO15/16/17/18)と衝突しない。RST/ENはハード直結リセットで退避シーケンスに使えないため、候補になるのはBOOTボタンのみ。**未検証**(`digitalRead(0)`の実機確認が要る) | [log/2026-08-09-emergency-reboot-button-reconsidered.md](log/2026-08-09-emergency-reboot-button-reconsidered.md) |
+| 2026-08-09 | **Namazu firmwareの便利機能を棚卸しし、Electabuzzへの転用候補を[open-questions.md](open-questions.md)に追記した。** 調査対象はOTA・NVS化(既存エントリと重複するため追記なし)・batch-uplink v1.7.0(接続使い回し)/v1.8.0(CA証明書ピン留め)・リモート再起動・稼働時間(uptime)ヘッダによる再起動検知・ビルド版数埋め込み・heapテレメトリ・`gBatchQueue`のボトルネック設計。**実装はせずリスト化のみ**。batch-uplinkのv1.7.0/v1.8.0追従とリモート再起動・稼働時間ヘッダは追加のバージョンpinが不要(現行pin`v1.6.0`で足りる)と分かった一方、`gBatchQueue`のボトルネック対策とNamazu固有の緊急再起動ボタンは見送りと判断した(データレートが87倍違うため実益が薄い/対応ハードウェアが無い) | [log/2026-08-09-namazu-convenience-features-survey.md](log/2026-08-09-namazu-convenience-features-survey.md) |
+| 2026-08-09 | **バッチ境界の針ノイズ(NTPロック済み区間側)、並行セッションによる独立な再検証で「未解消・確率的な劣化」と確定した。** ロック直後(観測数8〜)のセッションの261境界を全数走査した結果、`tb_obs_count`遷移の1バッチ後は80mHz超の異常率が基準の約6倍(10.6% vs 1.8%、最大259mHz)。以前「65分・131境界全て解消(dt誤差±1.3ms)」と評価していたのは観測数の多い(55〜79)成熟した回帰のデータだけを見ていたためと判明——ロック直後か十分成熟した後かで検証結果が変わる。「5/5件で例外なく」という当初の表現も撤回し、確率的な劣化として記録し直した | [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md) |
 | 2026-08-09 | **NOMINAL区間の針ノイズを固定アンカー方式で解消した(実機確認済み)。** PR #16デプロイ後、ダッシュボードでNOMINAL(灰色)区間だけ針が残っていると判明——`timesync::nowUs()`を都度読み直す旧経路がNOMINAL側に残っており、SNTPのslewジッタが増幅されていた。`gNominalAnchorUnixUs`(固定アンカー)+公称fsの線形外挿に変更。**実機投入したところ、SNTP初回同期前にアンカーを読んでしまい1970年付近の値で固定される副作用が発覚**(`series/1970/01/01/00/`への誤配置。原因はWiFi不調でSNTP初回同期が遅れたこと)。アンカー取得を`timesync::isSynced()`確認後の遅延取得に直し、再実機投入で境界dt=1.0000秒(全件、stdev=0)を確認、ダッシュボードの目視でも棘が消えたことを確認した | [log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md) |
+| 2026-08-09 | **バッチ境界の針ノイズ(NTPロック済み区間側)、2回目の修正(`framesAtEnd`化)でも解消していないと外部照合で判明した。** `tb_obs_count`(NTP観測の累積数)が増加した直後のバッチでdtジャンプが起きるパターンを実データで確認。原因は`NtpTimebase::unixUsAt()`が使う回帰係数(`fsHz`)がNTP観測1点ごとに更新され、同じ`ticks`に対する出力が観測追加の前後で不連続にシフトすること——Core0の処理遅延(2回目の修正が対応)とは別の、回帰再計算そのものに内在する不連続性。`open-questions.md`の「片付いた」表記を撤回し、`risks.md`リスク12を更新した。**未修正のまま記録**(規模の再評価は上記エントリを参照) | [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md) |
+| 2026-08-09 | **powerk95(先行実装)との外部照合を初めて実施し、相関0.993を確認した。** `/recent`(Electabuzz)とpowerk95 50Hzページのグラフ内データ(手動CSV DL)をJST秒で突き合わせ、共通1788点で相関係数0.993・平均差-1.0mHz・標準偏差4.7mHzを得た。周波数変動の「形」が一致することを実データで確認——`verification.md`の外部照合(補助)を初めて実施した回。残差の外れ値5点を精査したところ別の発見(下記バッチ境界ジャンプ)に繋がった | [log/2026-08-09-powerk95-external-verification.md](log/2026-08-09-powerk95-external-verification.md) |
 | 2026-08-08 | **PR #14(バッチ境界の針ノイズ修正)とmainでコンフリクトし、マージして再投入した。** 真の衝突は`docs/progress.md`(索引テーブルの行追加同士)と`firmware/src/main.cpp`のみで、後者は`loop()`内の互いに独立した箇所(NOMINAL→NTP遷移検出 vs バッチ起点の`framesAtEnd`化)だったため3-wayマージが自動で成立した。マージ後、firmware全テスト・3ビルド環境・lambda 47テストを再確認し、`terraform apply`と実機書き込みを再実行して両方の修正が同居して正常に動くことを確認した(`session_id=10`) | [log/2026-08-08-nominal-window-merge-redeploy.md](log/2026-08-08-nominal-window-merge-redeploy.md) |
 | 2026-08-08 | **NOMINAL区間の対処(案A)を実機・実クラウドへ投入した。** `terraform apply`(0 add/2 change/0 destroy、api+ingestのコードのみ更新)、実機書き込み(`pio run -e record -t upload`、USBシリアルはVID:PID(1A86:55D3=CH343)で本機と確認)。起動ログで**設計どおり起動直後から記録が始まる**ことを確認した(`# recording started immediately (timebase_source=NOMINAL)...`)。NOMINAL→NTPの遷移を跨ぐ実データでの確認(約600秒後)はこれから | [log/2026-08-08-nominal-window-deploy.md](log/2026-08-08-nominal-window-deploy.md) |
 | 2026-08-08 | **NOMINAL区間の対処(案A)をfirmware・lambda・dashboardの3層に実装した。** `env:record`はNTPロックを待たず起動直後から`timebase_source=NOMINAL`で記録・送信し、ロックした瞬間に規正済み`fs`で`GoertzelEstimator`を作り直す(`initialCyclesQ16`引数を追加して絶対累積位相の連続性を保った)。`lambda/api/handler.py`にセッション単位の補正係数(`locked_fs/nominal_fs`)を求める`_session_fs_corrections()`を追加し、`freq_hz_corrected`と各点の`timebase_source`をレスポンスに足した。`dashboard/app.js`はNOMINAL区間を点線、補正到着後の予測値をアンバーの破線で重ねて描く。firmwareの全テスト・3ビルド環境、lambdaの47テスト全緑。ローカルサーバ+ブラウザで合成データによる描画確認済み。**実機・実クラウドへの投入(`terraform apply`・実機書き込み)はまだ** | [log/2026-08-08-nominal-window-implementation.md](log/2026-08-08-nominal-window-implementation.md) |
@@ -109,11 +114,17 @@
 - ~~**AFEのC1(LPF)を実装・確定する**~~ **済み**（2026-08-08。15nFを実装、
   `env:gridfreqtest`での再測定でクリッピング消失・THD 0.0%維持を確認。
   → [log/2026-08-08-c1-lpf-verification.md](log/2026-08-08-c1-lpf-verification.md)）
-- ~~**バッチ境界の針ノイズを直す**~~ **firmware修正・実機投入済み**（2026-08-08。
-  `NtpTimebase::unixUsAt()`でバッチ起点を`gFs`回帰へ統一(1回目)、それでも
-  NTP問い合わせ中の`loop()`遅延で再発したため`WindowRecord::framesAtEnd`
-  (窓完成の瞬間のフレーム数)を追加してCore0の処理遅延を経路から排除(2回目)。
-  **NTP問い合わせを複数回またぐ実機確認はこれから**。
+- **バッチ境界の針ノイズ、NOMINAL区間は解消・NTPロック済み区間は未解決（2026-08-09時点）。**
+  **NOMINAL区間**（未規正、`timesync`直読み）は固定アンカー+公称fsの線形外挿で解消
+  （境界dt=1.0000秒 stdev=0を実機確認）。→ [log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)
+  **NTPロック済み区間**（`gFs`の回帰）は`NtpTimebase::unixUsAt()`でバッチ起点を`gFs`回帰へ
+  統一(1回目)、`WindowRecord::framesAtEnd`でCore0の処理遅延を排除(2回目)したが未解決のまま。
+  外部照合(powerk95)と、ロック直後セッション261境界の独立な再検証で**確率的な劣化**と
+  判明した——`unixUsAt()`は`ticks0_`からの外挿なので、NTP観測1点ごとに更新される
+  回帰係数`fsHz`の変化が外挿距離ぶん増幅される。遷移直後〜数十秒は80mHz超の異常率が
+  基準の約6倍(最大259mHz)。2回の既存修正はどちらもこれに対応していない。対策は
+  「回帰係数の凍結」「外挿距離の制限」「API側のdt許容を締める」の3方向、まだ未実装。
+  → [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)
   → [log/2026-08-08-batch-start-frame-capture-time.md](log/2026-08-08-batch-start-frame-capture-time.md)）
 
 ### まだ触っていない領域
