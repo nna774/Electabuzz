@@ -23,7 +23,20 @@
 | **`v_rms_mv` の基準点** | **商用の 100V は mV では u16 に収まらない**（最大 65.535V）。トランス二次側の実効値[mV]なら 10.5V ≒ `10500` で収まる。二次側の値を持つか、壁側に換算して単位を変える（10mV 刻み等）か。**AFE 分圧抵抗は R1=100kΩ/R2=6.8kΩ に確定済み**（→ [hardware.md](hardware.md)）。レコードを1バイトも記録していない今なら変更が無料で、記録開始後は高くつく。→ [wire-format.md](wire-format.md) |
 | **レコードの `flags`** | ビットを1つも割り当てていない。**何を品質として立てるかは位相推定の実装が決める**ので、それが在るまで決めない（今決めるのは「存在しない要件への一般化」）。フィールドは確保済み。→ [wire-format.md](wire-format.md) |
 
-**バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-09、実機確認済み。NTPロック済み区間は`NtpTimebase::unixUsAt()`、NOMINAL区間は固定アンカー+公称fsの線形外挿で、どちらも境界dtが実質ジッタ無しになった)。→ [risks.md](risks.md)リスク12、[log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)
+**バッチ境界のタイムスタンプジャンプの直し方**は、NOMINAL区間側は片付いたが
+NTPロック済み区間側はまだ片付いていない。**NOMINAL区間**(未規正、`timesync`直読み)
+は固定アンカー+公称fsの線形外挿で解消した(2026-08-09、実機確認済み。境界dt=1.0000秒
+stdev=0)。**NTPロック済み区間**(`gFs`の回帰)は2026-08-08に2回修正した
+(`unixUsAt()`でバッチ起点を`gFs`回帰に統一→`framesAtEnd`でCore0の処理遅延を排除)
+が、2026-08-09のpowerk95外部照合と、その後の並行セッションによる独立な再検証
+(261境界の全数走査)で**まだ未解消と判明した**——`NtpTimebase::unixUsAt()`は
+`ticks0_`からの外挿なので、回帰係数`fsHz`がNTP観測1点ごとに更新されるたびに
+外挿距離ぶん増幅されてズレる。遷移直後〜数十秒は80mHz超の異常率が基準の
+約6倍(10.6% vs 1.8%)になる確率的な劣化として実データで確認済み。firmware側で
+回帰係数を凍結する・外挿距離を制限する、あるいはAPI側のdt許容を締めるかの
+判断がまだ残っている。→ [risks.md](risks.md)リスク12、
+[log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)(NOMINAL側)、
+[log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)(NTP側、未解消)
 
 ## 購入時に確認すること
 
