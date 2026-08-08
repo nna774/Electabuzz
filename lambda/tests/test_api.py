@@ -39,9 +39,10 @@ def h(monkeypatch):
 
 
 def seed(h, device_id: int, batch_start_us: int, session_id: int, records,
-         *, flags: int = 0, rate_mhz: int = 1000):
+         *, flags: int = 0, rate_mhz: int = 1000, source: int = 0, fs_uhz: int = 48_000_000_000):
     data = build(records=records, start_us=batch_start_us, device_id=device_id,
-                 session_id=session_id, rate_mhz=rate_mhz, flags=flags)
+                 session_id=session_id, rate_mhz=rate_mhz, flags=flags, source=source,
+                 fs_uhz=fs_uhz)
     key = s3keys.series_key(device_id, batch_start_us)
     h._s3().put_object(Bucket=BUCKET, Key=key, Body=data)
 
@@ -138,6 +139,49 @@ def test_discontinuity_flag_suppresses_frequency_in_batch(h):
     body = json.loads(resp["body"])
     assert body["n"] == 3
     assert all(f is None for f in body["freq_hz"])
+
+
+def test_nominal_without_lock_has_no_corrected_freq(h):
+    # ロック(規正済みバッチ)がまだ来ていないNOMINAL区間には補正値を出さない。
+    recs = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=9, records=recs, source=0)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["timebase_source"] == ["NOMINAL", "NOMINAL", "NOMINAL"]
+    assert all(f is None for f in body["freq_hz_corrected"])
+
+
+def test_nominal_gets_corrected_once_session_locks(h):
+    # 同一セッション: 先にNOMINALバッチ、続いてNTP(ロック)バッチ。
+    # ロック後、NOMINALレコードだけにfreq_hz * (locked_fs/nominal_fs) が付く。
+    nominal_fs = 48_000_000_000
+    locked_fs = 48_004_800_000  # +100ppm
+    recs_nominal = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    recs_locked = [(cycles(50.0, i), 0, 0) for i in range(3, 6)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=42, records=recs_nominal,
+         source=0, fs_uhz=nominal_fs)
+    seed(h, device_id=1, batch_start_us=BASE_US + 3_000_000, session_id=42, records=recs_locked,
+         source=1, fs_uhz=locked_fs)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 10_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["timebase_source"] == ["NOMINAL"] * 3 + ["NTP"] * 3
+
+    factor = locked_fs / nominal_fs
+    # NOMINAL区間: 先頭は直前点が無いのでfreqそのものがNone。以降は補正が付く。
+    assert body["freq_hz_corrected"][0] is None
+    assert body["freq_hz_corrected"][1] == pytest.approx(50.0 * factor)
+    assert body["freq_hz_corrected"][2] == pytest.approx(50.0 * factor)
+    # NTP区間はすでに規正済みなので補正値を出さない(Noneのまま)。
+    assert body["freq_hz_corrected"][3] is None
+    assert body["freq_hz_corrected"][4] is None
+    assert body["freq_hz_corrected"][5] is None
+    # 生のfreq_hzは補正の有無に関わらずこれまでどおり出る。
+    assert body["freq_hz"][1] == pytest.approx(50.0)
+    assert body["freq_hz"][4] == pytest.approx(50.0)
 
 
 def test_minutes_is_clamped(h):

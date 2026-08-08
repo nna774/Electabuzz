@@ -152,6 +152,27 @@ int main() {
     check("resetWindow後の最初の窓は基準点(false)", !firstAfterResetTrue);
   }
 
+  // --- initialCyclesQ16: 作り直しの継続性(fs規正時の再構築を模す) ---
+  {
+    gridfreq::GoertzelEstimator est(fNom, fs);
+    const size_t winN = est.windowSamples();
+    const auto tone = makeTone(fNom, fs, 1000.0, 0.0, winN * 3);
+    for (int32_t s : tone) est.addSample(s);
+    const uint64_t seed = est.cyclesQ16();
+    check("継続性のテスト前提: cyclesが進んでいる", seed > 0);
+
+    // 別のfsで作り直す(NTPロック時の再構築を模す)。
+    gridfreq::GoertzelEstimator est2(fNom, fs * 1.00001, 1.0, seed);
+    check("作り直し直後、cyclesQ16はseedを引き継ぐ", est2.cyclesQ16() == seed);
+
+    const auto tone2 = makeTone(fNom, fs * 1.00001, 1000.0, 0.0, est2.windowSamples() * 2);
+    uint64_t lastCycles = seed;
+    for (int32_t s : tone2) {
+      if (est2.addSample(s)) lastCycles = est2.cyclesQ16();
+    }
+    check("作り直し後もcyclesはseedより後退しない", lastCycles >= seed);
+  }
+
   // --- 50/60Hz判別 ---
   {
     const size_t winN = static_cast<size_t>(fs + 0.5);

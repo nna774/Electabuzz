@@ -28,7 +28,13 @@ class GoertzelEstimator {
   // **fs はコンストラクタで固定される。** ドリフトを追い続けたいなら
   // 呼び出し側が作り直すこと(Goertzel自体はfsの出処にもドリフトにも無関心という
   // 設計そのものが、フェーズ2を待たずにC++移植してよい根拠になっている)。
-  GoertzelEstimator(double fNominalHz, double fs, double windowSec = 1.0);
+  //
+  // initialCyclesQ16: 作り直す場合に、直前の推定器の cyclesQ16() を渡して
+  // 絶対累積位相の連続性を保つこと(docs/storage.mdの「累積位相は絶対値で持て」
+  // という不変条件——作り直すたびに0へ戻すと、その区間が欠測したように
+  // 見えてしまう)。既定の0は新規セッション用。
+  GoertzelEstimator(double fNominalHz, double fs, double windowSec = 1.0,
+                     uint64_t initialCyclesQ16 = 0);
 
   // サンプルを1つ流し込む。窓(windowSamples()個)が溜まるたびに内部で1窓確定する。
   // 戻り値: 窓が確定して cyclesQ16()/freqHz()/magnitude() が更新されたら true。

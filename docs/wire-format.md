@@ -32,6 +32,12 @@
 
 設計上の判断を4点。
 
+- **`timebase_source`は実際にNOMINALで送られる(2026-08-08〜)。** `env:record`は
+  NTPロックを待たずに起動直後から記録・送信するようになったため、`NOMINAL`は
+  単なる「後方互換のための予約値」ではなく実際に送信される値になった。cloud側
+  (`lambda/api/handler.py`)はNOMINAL区間をそのセッションのロック後に事後補正
+  できる——詳細は [cloud.md](cloud.md)、決定の経緯は
+  [log/2026-08-08-nominal-window-open-question.md](log/2026-08-08-nominal-window-open-question.md)。
 - **時間基準のフィールドを源に依存しない名前で持つ。** `pps_count` / `pps_residual_ns` と
   していた当初案は PPS を前提に固まっていた。**PPS が無い期間(GNSS 到着前)と holdover 期間を
   同じ形で表現できないと、後段が二重実装になる。** 一般化して `timebase_source` で源を明示する。
