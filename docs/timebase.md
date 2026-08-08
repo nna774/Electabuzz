@@ -215,6 +215,26 @@ SNTP クライアント）。**回帰は Arduino に依存しない**ので `tes
 
 **グラフの上で帯が縮む瞬間が、GNSS を繋いだ日になる。それが一番正直な見せ方だ。**
 
+### NOMINAL区間(起動直後〜NTPロックまで)の扱い (2026-08-08決定)
+
+`env:record`は**NTPロックも待たない**。起動直後から公称`fs`でGoertzelを動かし、
+`timebase_source=NOMINAL`と正直に申告して記録・送信する。ロックした瞬間
+(`NtpTimebase::kMinSpanSeconds`=600秒)、規正済み`fs`で推定器を作り直す。
+
+理由: `fs`誤差は測定周波数の誤差にそのまま乗るので(本ドキュメント冒頭の式)、
+NOMINALタグを付けるだけでは周波数値そのものの系統誤差は救えない——TEと違い
+「表示を封じる」では済まない一次データだからだ。だが**その系統誤差は
+`fs`のずれに対して代数的に厳密なスカラー補正で戻る**(`corrected = raw ×
+locked_fs/nominal_fs`。Goertzelの窓がサンプル数=「公称fsでの1秒ぶん」で
+切られることから導かれる関係で、近似ではない。線形性は
+`tools/check_fs_linearity.py`で±1000ppmまで検証済み)。
+
+そのため cloud 側(`lambda/api/handler.py`)が、同一セッション内でNOMINAL区間の
+後にロックが来た時点で事後補正できる——起動直後の約10分間を**欠落させない**。
+補正の適用ルールは [cloud.md](cloud.md) の「NOMINAL区間の事後補正」節、
+検討の経緯は
+[log/2026-08-08-nominal-window-open-question.md](log/2026-08-08-nominal-window-open-question.md)。
+
 ### 事後補正の余地を無料で残す
 
 `fs` の仮定値と **SoC 温度**を記録しておけば、GNSS 到着後に水晶の `fs(T)` 特性を実測して

@@ -294,16 +294,21 @@ void logLine(const char* server, bool ok, const char* err, const timebase::SntpS
 
 #if defined(NAMZ_GRIDFREQ_RECORD)
 // NAMZ_GRIDFREQ_RECORD を定義してビルドすると、フェーズ2(PPS同時サンプリング)を
-// 待たずに実測・記録・送信を始める。**timebase_source は正直に NTP 品質(NtpTimebase)
-// と申告する**——PPS を名乗るのが嘘になる。Goertzelの計算自体はLチャンネルの
-// 生サンプルだけで完結し、PPS(方式A/B)の選択には一切触れないので、
+// 待たずに実測・記録・送信を始める。**timebase_source はそのバッチ時点の
+// gFs.source()を正直に申告する**——PPS を名乗ることは無い。Goertzelの計算自体は
+// Lチャンネルの生サンプルだけで完結し、PPS(方式A/B)の選択には一切触れないので、
 // C++移植をフェーズ2待ちにする理由が無いと判断した経緯は
 // docs/log/2026-08-07-goertzel-cpp-port.md にある。
 //
-// **測れなかった区間を測れたように見せない不変条件は、ここでも同じ形で守る**:
-// fs が NtpTimebase で規正できるまで(NtpTimebase::kMinSpanSeconds=600秒)は
-// Goertzel を起動しない。DMA が溢れたら該当バッチに
-// GfrqFlagDiscontinuity を立てる（→ pumpI2s() 内の resetWindow() 呼び出し）。
+// **NTPロックも待たない(2026-08-08決定)**: 起動直後は公称fsでGoertzelを
+// 動かし始め、timebase_source=NOMINALと正直に申告して記録・送信する。
+// fsがNtpTimebaseで規正できた(NtpTimebase::kMinSpanSeconds=600秒)瞬間に
+// 規正済みfsで推定器を作り直し、以後はNTPと申告する。
+// **「測れなかった区間を測れたように見せない」不変条件は、値を出さないのではなく
+// 正直にNOMINALと申告することで守る**——cloud側がNOMINAL区間を後から
+// スカラー補正できることを線形性検証で確かめた上での判断(→
+// docs/log/2026-08-08-nominal-window-open-question.md)。DMAが溢れたら
+// 該当バッチにGfrqFlagDiscontinuityを立てる(→ pumpI2s() 内の resetWindow() 呼び出し)。
 
 namespace {
 
@@ -313,6 +318,11 @@ double gFNominalHz = 0.0;  // 0 = 未判別
 Uploader* gUploader = nullptr;
 Batch* gCurrentBatch = nullptr;
 bool gBatchDiscontinuity = false;
+// 前回ループ時点でgFs.source()がNTPだったか。NOMINAL→NTPへの遷移だけを
+// エッジ検出してGoertzelを作り直すために使う。tick逆行によるgFs.reset()で
+// 理論上NOMINALへ戻ることがあるが、その場合は素直にfalseへ戻り、
+// 再ロック時にまた作り直しが起きるだけでよい。
+bool gFsSourceWasNtp = false;
 
 }  // namespace
 
@@ -320,7 +330,8 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(500);
   Serial.println();
-  Serial.println("# electabuzz gridfreq record (PPS待たず開始。timebase_source=NTP)");
+  Serial.println("# electabuzz gridfreq record (PPS/NTPロックとも待たず開始。"
+                  "timebase_sourceはgFs.source()を正直に申告)");
 
   gPrefs.begin("electabuzz", false);
   gSessionId = gPrefs.getUInt("session_id", 0) + 1;
@@ -367,13 +378,25 @@ void setup() {
                   det50.magnitude(), det60.magnitude());
   }
 
+  // **NTPロックを待たず、公称fsで即座に記録を始める。**
+  // `gFs.fsMicroHz()`はロック前は公称値をそのまま返すので(NtpTimebaseの不変条件)、
+  // ここではまだ「測った値」を名乗っていない——batch側もtimebase_source=NOMINALと
+  // 正直に申告する(loop()参照)。ロックした瞬間にgFsSourceWasNtpの遷移を検出して
+  // 推定器を規正済みfsで作り直す。→ docs/log/2026-08-08-nominal-window-open-question.md
+  gWindowQueue = xQueueCreate(8, sizeof(WindowRecord));
+  gRecordGoertzel.store(
+      new gridfreq::GoertzelEstimator(gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6,
+                                       1.0),
+      std::memory_order_relaxed);
+
   xTaskCreatePinnedToCore(i2sTask, "i2s_pump", 4096, nullptr, 5, nullptr, 1);
 
   gUploader = new Uploader(kIngestUrl, /*alertUrl=*/"", kHmacSecret, kDeviceId, kMaxRamBatches,
                             kSpillDir, /*dropOldestWhenFull=*/true);
   gUploader->begin();
 
-  Serial.println("# waiting for fs to lock via NTP (~600s)...");
+  Serial.println("# recording started immediately (timebase_source=NOMINAL); "
+                  "will re-arm goertzel once fs locks via NTP (~600s)");
   gNextQueryMs = millis();
 }
 
@@ -408,23 +431,30 @@ void loop() {
                   gFs.source() == timebase::Source::kNtp ? "NTP" : "NOMINAL",
                   ppmOf(gFs, kFsNominalMicroHz), gFs.residualNs(), i2s.lPp, i2s.rPp);
 
-    gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
-  }
-
-  // fs が NTP で規正できるまでは Goertzel を起動しない。
-  // **測れていない精度で「測れた」ように見せない。**
-  if (gRecordGoertzel.load(std::memory_order_relaxed) == nullptr) {
-    if (gFs.source() == timebase::Source::kNtp) {
-      auto* est = new gridfreq::GoertzelEstimator(
-          gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6, 1.0);
-      gWindowQueue = xQueueCreate(8, sizeof(WindowRecord));
-      gRecordGoertzel.store(est, std::memory_order_relaxed);
-      Serial.printf("# goertzel armed: f_nom=%.0f fs=%.6f obs=%u resid_ns=%u\n", gFNominalHz,
-                    static_cast<double>(gFs.fsMicroHz()) / 1e6, gFs.obsCount(),
+    // NOMINAL→NTPへ切り替わった瞬間、規正済みfsでGoertzelを作り直す。
+    // **fsはコンストラクタで固定される設計なので、作り直す以外に追従する方法がない**
+    // (→ Goertzel.h)。cyclesQ16は継続させる(絶対累積位相を後退させない不変条件)。
+    // 旧オブジェクトは意図的にdeleteしない: Core1(i2sTask)がaddSample()実行中に
+    // このポインタを参照している可能性があり、delete するとuse-after-freeになる。
+    // この切り替えは通常運用でセッションに1回しか起きないので、
+    // 数百バイトのリークは実害が無い。
+    const bool nowNtp = gFs.source() == timebase::Source::kNtp;
+    if (nowNtp && !gFsSourceWasNtp) {
+      gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+      const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+      gRecordGoertzel.store(
+          new gridfreq::GoertzelEstimator(gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6,
+                                           1.0, seedCycles),
+          std::memory_order_relaxed);
+      Serial.printf("# fs locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
+                    "resid_ns=%u\n",
+                    static_cast<double>(gFs.fsMicroHz()) / 1e6,
+                    static_cast<unsigned long long>(seedCycles), gFs.obsCount(),
                     gFs.residualNs());
     }
-    delay(50);
-    return;
+    gFsSourceWasNtp = nowNtp;
+
+    gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
   }
 
   WindowRecord rec;
@@ -445,9 +475,12 @@ void loop() {
       hf.tb_obs_count = gFs.obsCount();
       hf.tb_residual_ns = gFs.residualNs();
       hf.flags = gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0;
-      // **PPS が無いので堂々と NTP と申告する。** これが嘘にならない限り、
-      // フェーズ2を待たずに送り始めてよいという判断の前提そのものだ。
-      hf.timebase_source = kGfrqTbNtp;
+      // **正直にそのバッチ時点のgFs.source()を申告する。** ロック前はNOMINAL、
+      // ロック後はNTP(PPSが無いのでPPSを名乗ることはない)。1バッチはこの粒度
+      // でしか源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で
+      // 代表させる(→ docs/log/2026-08-08-nominal-window-open-question.md)。
+      hf.timebase_source =
+          gFs.source() == timebase::Source::kNtp ? kGfrqTbNtp : kGfrqTbNominal;
       hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
       gridfreq::fillHeader(*gCurrentBatch, hf);
 

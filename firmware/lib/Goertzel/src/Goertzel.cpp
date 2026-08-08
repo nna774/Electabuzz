@@ -15,8 +15,12 @@ double wrapToPi(double x) {
 
 }  // namespace
 
-GoertzelEstimator::GoertzelEstimator(double fNominalHz, double fs, double windowSec)
-    : fNominalHz_(fNominalHz), windowSec_(windowSec) {
+GoertzelEstimator::GoertzelEstimator(double fNominalHz, double fs, double windowSec,
+                                      uint64_t initialCyclesQ16)
+    : fNominalHz_(fNominalHz),
+      windowSec_(windowSec),
+      cyclesAccum_(static_cast<double>(initialCyclesQ16) / 65536.0),
+      cyclesQ16_(initialCyclesQ16) {
   winN_ = static_cast<size_t>(fs * windowSec + 0.5);
   const double theta = 2.0 * M_PI * fNominalHz_ / fs;
   coeff_ = 2.0 * std::cos(theta);

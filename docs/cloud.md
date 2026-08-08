@@ -78,8 +78,9 @@ S3スキャン量に上限を付けている）の瞬時周波数の時系列を
 `fs_measured_hz`・`tb_residual_ns`等の品質を載せており、ダッシュボードの
 「今の状態」表示と生存確認を兼ねる。
 
-瞬時周波数は`Record.cycles`(絶対累積位相)の隣接差分から`lambda/store_gridfreq.py`
-が計算する。**以下のいずれかに該当する隣接点はfreqを計算しない(null=系列の
+瞬時周波数は`Record.cycles`(絶対累積位相)の隣接差分から`lambda/api/handler.py`の
+`_series_payload()`が計算する(バッチの読み込み自体は`lambda/store_gridfreq.py`)。
+**以下のいずれかに該当する隣接点はfreqを計算しない(null=系列の
 途切れ)**——測れなかった区間を測れたように見せないため:
 
 - `session_id`が変わる(デバイス再起動)
@@ -87,6 +88,24 @@ S3スキャン量に上限を付けている）の瞬時周波数の時系列を
 - バッチに`GfrqFlagDiscontinuity`が立っている(DMA溢れ等。ファーム側の
   `GoertzelEstimator::resetWindow()`がこの窓を無出力にするため、ワイヤ上の
   レコード列は詰まって見えるが実際の間隔は`record_rate_mhz`どおりではない)
+
+### NOMINAL区間の事後補正 (2026-08-08〜)
+
+`env:record`はNTPロックを待たずに起動直後から`timebase_source=NOMINAL`で
+記録・送信する(→ [timebase.md](timebase.md)「NOMINAL区間の扱い」)。api側は
+`_session_fs_corrections()`で、同一`session_id`内のNOMINALタグ付きバッチの
+`fs_measured_uhz`(=公称fs定数)と、その後最初に規正済み(`is_disciplined`)に
+なったバッチの`fs_measured_uhz`(=ロック値)を突き合わせ、
+`correction = locked_fs / nominal_fs` を求める。この式は近似ではなく、
+Goertzelの窓がサンプル数(=「公称fsでの1秒ぶん」)で切られることから
+代数的に成り立つ関係——線形性は`tools/check_fs_linearity.py`で検証済み。
+
+NOMINAL区間かつ補正係数が求まっているレコードには
+`freq_hz_corrected = freq_hz * correction` を追加で返す。ロックがまだ来て
+いない(現在進行形の)NOMINAL区間は`null`のまま——**測れなかった精度のものを
+測れたように見せない**という一線は、値を出さないのではなく「補正できるまでは
+補正値を出さない」形で守る。レスポンスには各点の`timebase_source`(文字列配列)
+も追加し、ダッシュボードが区間ごとに線種を変えられるようにしてある。
 
 ## dashboard
 

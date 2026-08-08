@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Electabuzz — 系統周波数モニタ</title>
   <style>
-    :root { color-scheme: light dark; --fg: #222; --bg: #fafafa; --line: #ccc; --accent: #2a6fdb; }
-    @media (prefers-color-scheme: dark) { :root { --fg: #ddd; --bg: #1a1a1a; --line: #444; } }
+    :root { color-scheme: light dark; --fg: #222; --bg: #fafafa; --line: #ccc; --accent: #2a6fdb;
+      --nominal: #999; --predict: #d4a017; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #ddd; --bg: #1a1a1a; --line: #444;
+      --nominal: #888; --predict: #e0b52c; } }
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); background: var(--bg); }
     header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -54,8 +56,12 @@
     </div>
     <div id="status" class="muted status-line"></div>
     <canvas id="freq-canvas"></canvas>
-    <p class="muted">縦軸: 系統周波数[Hz]。破線は公称値(50/60Hz)。データが途切れている区間は
-      線をつながない（PPS未着のためGNSS品質ではなくNTP品質。時刻偏差の絶対値はまだ出せない）。</p>
+    <p class="muted">縦軸: 系統周波数[Hz]。灰色の破線は公称値(50/60Hz)。データが途切れている区間は
+      線をつながない（PPS未着のためGNSS品質ではなくNTP品質。時刻偏差の絶対値はまだ出せない）。
+      起動直後〜NTP規正(約10分)までは
+      <span style="color:var(--nominal)">点線(未規正・生の値)</span>で描き、規正が済むと
+      <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
+      がその区間へ遡って重なる。</p>
 
     <table id="quality-table">
       <tbody></tbody>

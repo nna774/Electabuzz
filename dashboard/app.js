@@ -41,6 +41,8 @@ function drawFreqChart(cv, series) {
   const fg = themeColor('--fg');
   const line = themeColor('--line');
   const accent = themeColor('--accent');
+  const nominalColor = themeColor('--nominal') || '#888';
+  const predictColor = themeColor('--predict') || accent;
   ctx.clearRect(0, 0, w, h);
 
   const n = series.t_us.length;
@@ -87,18 +89,45 @@ function drawFreqChart(cv, series) {
   ctx.fillText(fNom.toFixed(0) + 'Hz', PAD - 4, y(fNom) + 4);
   ctx.textAlign = 'left';
 
-  // 周波数の折れ線。null(欠測・不連続)をまたぐところは線をつながない。
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  let drawing = false;
-  for (let i = 0; i < n; i++) {
-    const f = series.freq_hz[i];
-    if (f == null) { drawing = false; continue; }
-    const px = x(series.t_us[i]), py = y(Math.min(Math.max(f, yMin), yMax));
-    if (!drawing) { ctx.moveTo(px, py); drawing = true; } else { ctx.lineTo(px, py); }
+  // 生の周波数の折れ線。null(欠測・不連続)をまたぐところは線をつながない。
+  // **NOMINAL区間(fs未規正)は淡い点線で描き、規正済み区間と一見で区別できるようにする**
+  // ——「測れなかった精度のものを測れたように見せない」の描画版(→ docs/timebase.md)。
+  // 1点ずつ、区間の始点の timebase_source でその区間の線種を決める。
+  const py = (f) => y(Math.min(Math.max(f, yMin), yMax));
+  for (let i = 1; i < n; i++) {
+    const f0 = series.freq_hz[i - 1], f1 = series.freq_hz[i];
+    if (f0 == null || f1 == null) continue;
+    const isNominal = series.timebase_source && series.timebase_source[i] === 'NOMINAL';
+    ctx.save();
+    ctx.strokeStyle = isNominal ? nominalColor : accent;
+    ctx.lineWidth = isNominal ? 1.25 : 1.5;
+    if (isNominal) ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x(series.t_us[i - 1]), py(f0));
+    ctx.lineTo(x(series.t_us[i]), py(f1));
+    ctx.stroke();
+    ctx.restore();
   }
-  ctx.stroke();
+
+  // NOMINAL区間のうち、NTPロック後に事後補正できた「補正した予測値」を重ねて描く。
+  // ロック前(現在進行形)はfreq_hz_correctedがNoneなので、まだ何も描かれない
+  // ——ロックした瞬間、この線が過去へ遡って現れる。
+  if (series.freq_hz_corrected && series.freq_hz_corrected.some((v) => v != null)) {
+    ctx.save();
+    ctx.strokeStyle = predictColor;
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([6, 3]);
+    ctx.beginPath();
+    let drawingPred = false;
+    for (let i = 0; i < n; i++) {
+      const fc = series.freq_hz_corrected[i];
+      if (fc == null) { drawingPred = false; continue; }
+      const px = x(series.t_us[i]);
+      if (!drawingPred) { ctx.moveTo(px, py(fc)); drawingPred = true; } else { ctx.lineTo(px, py(fc)); }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 // --- ステータス行・品質テーブル ---
