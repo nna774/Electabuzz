@@ -185,6 +185,42 @@ int main() {
           timebase::NtpTimebase(kNominalUHz).unixUsAt(ticks0) == 0);
   }
 
+  // --- 9. 原点ロールフォワードで、長時間経過後も1点追加あたりのunixUsAt変化が
+  //         小さいまま(→ docs/log/2026-08-09-batch-boundary-jump-regression-cause.md
+  //         のバッチ境界ジャンプ対策そのもの)。
+  {
+    Lcg rng;
+    timebase::NtpTimebase tb(kNominalUHz);
+    // ±5msの往復ノイズを64秒間隔で3時間ぶん投入(169点、約10.8時間相当のセッション
+    // 経過ではないが、ロールフォワード無しなら外挿距離が3時間近くまで伸びる状況)。
+    feed(tb, 37.5, 169, 64, 5000.0, rng);
+    check("長時間経過後もusable", tb.usable());
+
+    const uint64_t ticks0 = 123456789ULL;
+    const uint64_t unix0 = 1750000000000000ULL;
+    const double ppm = 37.5;
+    const double tLatest = 168.0 * 64.0;  // 直近(最後に投入した)観測のx
+    const uint64_t latestTicks =
+        ticks0 + static_cast<uint64_t>(kNominalHz * (1.0 + ppm * 1e-6) * tLatest + 0.5);
+    const uint64_t before = tb.unixUsAt(latestTicks);
+
+    // もう1点、NTP再問い合わせを模して追加する。
+    const double tNext = 169.0 * 64.0;
+    const double ticksNext = kNominalHz * (1.0 + ppm * 1e-6) * tNext + rng.next() * 5000.0;
+    tb.addObservation(ticks0 + static_cast<uint64_t>(ticksNext + 0.5),
+                      unix0 + static_cast<uint64_t>(tNext * 1e6), 4000);
+
+    const uint64_t after = tb.unixUsAt(latestTicks);
+    const double deltaMs =
+        std::fabs(static_cast<double>(after) - static_cast<double>(before)) / 1000.0;
+    // 対策前は3時間の外挿距離に比例して数十ms級まで増幅されうる(実データでは
+    // 数msのdt誤差が50Hzで数十〜百数十mHz級の周波数誤差になっていた)。
+    // ロールフォワード後は外挿距離がNTP問い合わせ間隔(64秒)程度に有界化される
+    // ので、1点あたりの変化はノイズ(±5ms)と同程度に収まるはず。
+    check("1点追加によるunixUsAtの変化が外挿距離に依存せず小さい(<10ms)",
+          deltaMs < 10.0);
+  }
+
   printf("\n%s (%d failures)\n", gFailures ? "FAILED" : "PASSED", gFailures);
   return gFailures ? 1 : 0;
 }

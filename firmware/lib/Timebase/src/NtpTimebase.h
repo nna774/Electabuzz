@@ -94,12 +94,23 @@ class NtpTimebase final : public TimebaseEstimator {
   double predictY(double x) const;
   double residualSumSquares() const;
 
+  // 回帰の原点(ticks0_/unixUs0_/meanX_/meanY_)を、回帰直線上の直近の点へ
+  // 付け替える。分散・共分散(cxx_/cxy_/cyy_)は原点の平行移動で不変なので、
+  // 回帰の精度は一切失わない。unixUsAt()の外挿距離(ticks - ticks0_)を
+  // 「NTP問い合わせ間隔程度」に有界化し、fsHzの更新1回あたりの絶対時刻への
+  // 影響がセッション経過時間に比例して増幅される問題を構造的に断つ
+  // (→ docs/log/2026-08-09-batch-boundary-jump-regression-cause.md)。
+  void rollForwardOrigin(double xNew);
+
   uint64_t nominalMicroHz_;
   double nominalHz_;
 
   bool have0_ = false;
   uint64_t ticks0_ = 0;
   uint64_t unixUs0_ = 0;
+  // 最初の観測時刻。ticks0_/unixUs0_と違いロールフォワードで動かさない不変の
+  // 基準点で、spanSeconds()(=usable()の「十分な観測期間があるか」判定)専用。
+  uint64_t epochUnixUs_ = 0;
   uint64_t lastTicks_ = 0;
   uint64_t lastUnixUs_ = 0;
 

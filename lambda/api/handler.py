@@ -152,9 +152,17 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
             f = None
             if (not suspect and nominal_dt and prev_t is not None
                     and prev_session == h.session_id):
-                dt = (t - prev_t) / 1e6
-                if 0.5 * nominal_dt <= dt <= 2.0 * nominal_dt:
-                    f = (r.cycles - prev_cycles) / dt
+                dt_actual = (t - prev_t) / 1e6
+                if 0.5 * nominal_dt <= dt_actual <= 2.0 * nominal_dt:
+                    # 除算には実測dt(t - prev_t)ではなくnominal_dt(理論値)を使う。
+                    # 実測dtはバッチ境界でNTP観測の反映によるタイムスタンプジッタを
+                    # 含み、これをcycles差分の分母に使うと数十〜百mHz級の偽の周波数
+                    # 変動が出る(→ docs/log/2026-08-09-batch-boundary-jump-regression-cause.md)。
+                    # DISCONTINUITYが立たない限り実際のサンプリング間隔は常に
+                    # record_rate_mhzどおりであることが設計上保証されている
+                    # (下のDISCONTINUITYコメント参照)ので、理論値の方が実測より正確。
+                    # 実測dtは「別セッション・大きな欠測でないか」の粗い判定にのみ使う。
+                    f = (r.cycles - prev_cycles) / nominal_dt
 
             # NOMINAL区間で、かつそのセッションが後にロックしたことが分かっている
             # 場合だけ「補正した予測値」を出す。ロック前(現在進行形)はNoneのまま。
