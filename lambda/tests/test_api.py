@@ -113,6 +113,30 @@ def test_frequency_continues_across_batch_boundary(h):
     assert body["freq_hz"][4] == pytest.approx(50.0)
 
 
+def test_batch_boundary_timestamp_jitter_does_not_distort_frequency(h):
+    # バッチ起点(batch_start_us)にNTP観測反映によるジッタ(数ms)が乗っても、
+    # 除算にはrecord_rate_mhz由来の理論値を使うので周波数は歪まない
+    # (→ docs/log/2026-08-09-batch-boundary-jump-regression-cause.md)。
+    # 実測dtを使っていた旧実装なら、この2msのジッタだけで約50.1Hzにズレていた
+    # (実データでは最大244mHz級のズレが261境界中16件で観測された)。
+    recs1 = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    recs2 = [(cycles(50.0, i), 0, 0) for i in range(3, 5)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=7, records=recs1)
+    # 本来3.000秒後のはずのバッチ起点が、NTP再同期の影響で2ms早く記録された想定。
+    jittered_start_us = BASE_US + 3_000_000 - 2_000
+    seed(h, device_id=1, batch_start_us=jittered_start_us, session_id=7, records=recs2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 10_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["n"] == 5
+    assert body["freq_hz"][3] == pytest.approx(50.0)  # ジッタに引きずられず正確
+    assert body["freq_hz"][4] == pytest.approx(50.0)
+    # t_usの方はbatch_start_usベースのままで、ジッタを隠さず反映する
+    # (時間軸の表示・時刻偏差の計算にはこちらを使うため)。
+    assert body["t_us"][3] == jittered_start_us
+
+
 def test_session_change_breaks_continuity(h):
     # 再起動(session_idが変わる)をまたぐと、その点のfreqはNoneになる。
     recs1 = [(cycles(50.0, i), 0, 0) for i in range(2)]

@@ -19,7 +19,7 @@ NtpTimebase::NtpTimebase(uint64_t nominalMicroHz)
 
 void NtpTimebase::reset() {
   have0_ = false;
-  ticks0_ = unixUs0_ = lastTicks_ = lastUnixUs_ = 0;
+  ticks0_ = unixUs0_ = epochUnixUs_ = lastTicks_ = lastUnixUs_ = 0;
   n_ = 0;
   spanSeconds_ = 0.0;
   minRttUs_ = 0xFFFFFFFFu;
@@ -35,6 +35,21 @@ bool NtpTimebase::usable() const {
 double NtpTimebase::predictY(double x) const {
   if (!(cxx_ > 0.0)) return meanY_;
   return meanY_ + (cxy_ / cxx_) * (x - meanX_);
+}
+
+void NtpTimebase::rollForwardOrigin(double xNew) {
+  // 新しい原点は「回帰直線上のxNewでの予測点」。生の観測点(ノイズを含む)では
+  // なく回帰の最良推定を使うことで、原点自体にノイズを乗せない。
+  const double yPred = predictY(xNew);  // meanX_/meanY_を動かす前に計算すること
+  const double ticksDelta = nominalHz_ * xNew + yPred;
+  const double unixUsDelta = xNew * 1e6;
+
+  ticks0_ += static_cast<uint64_t>(ticksDelta + 0.5);
+  unixUs0_ += static_cast<uint64_t>(unixUsDelta + 0.5);
+  meanX_ -= xNew;
+  meanY_ -= yPred;
+  // cxx_/cxy_/cyy_は原点の平行移動で不変(分散・共分散の基本性質)なので、
+  // 回帰の精度(=fsMicroHz()の確度)を一切失わずに原点だけ動かせる。
 }
 
 double NtpTimebase::residualSumSquares() const {
@@ -61,6 +76,7 @@ bool NtpTimebase::addObservation(uint64_t ticks, uint64_t unixUs, uint64_t rttTi
     have0_ = true;
     ticks0_ = ticks;
     unixUs0_ = unixUs;
+    epochUnixUs_ = unixUs;
   } else if (unixUs <= lastUnixUs_) {
     // サーバ時刻が進んでいない（重複・巻き戻り）。回帰の x にできない。
     ++rejected_;
@@ -92,7 +108,10 @@ bool NtpTimebase::addObservation(uint64_t ticks, uint64_t unixUs, uint64_t rttTi
   cxy_ += dx * (y - meanY_);
   cyy_ += dy * (y - meanY_);
 
-  spanSeconds_ = x;
+  // spanSeconds_は「最初の観測(epochUnixUs_)からの経過」であって、
+  // 原点からの経過(x)ではない。ロールフォワードでticks0_/unixUs0_を動かしても
+  // usable()の「十分な観測期間があるか」判定はこの不変の基準点で行う。
+  spanSeconds_ = static_cast<double>(unixUs - epochUnixUs_) * 1e-6;
   lastTicks_ = ticks;
   lastUnixUs_ = unixUs;
 
@@ -103,6 +122,15 @@ bool NtpTimebase::addObservation(uint64_t ticks, uint64_t unixUs, uint64_t rttTi
     // 少しずつ上へ緩める。まぐれの1点で以後を締め出さないため。
     minRttUs_ += (minRttUs_ >> kMinRttCreepShift) + 1;
   }
+
+  // 原点を直近の観測点へロールフォワードし、unixUsAt()の外挿距離を
+  // 「NTP問い合わせ間隔程度」に有界化する(→ rollForwardOrigin()のコメント参照)。
+  // usable()になってから始める——回帰がまだ不安定なうちにxNewを原点に据えても
+  // 意味のある基準点にならない。
+  if (usable()) {
+    rollForwardOrigin(x);
+  }
+
   return true;
 }
 
