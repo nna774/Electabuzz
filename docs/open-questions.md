@@ -23,7 +23,7 @@
 | **`v_rms_mv` の基準点** | **商用の 100V は mV では u16 に収まらない**（最大 65.535V）。トランス二次側の実効値[mV]なら 10.5V ≒ `10500` で収まる。二次側の値を持つか、壁側に換算して単位を変える（10mV 刻み等）か。**AFE 分圧抵抗は R1=100kΩ/R2=6.8kΩ に確定済み**（→ [hardware.md](hardware.md)）。レコードを1バイトも記録していない今なら変更が無料で、記録開始後は高くつく。→ [wire-format.md](wire-format.md) |
 | **レコードの `flags`** | ビットを1つも割り当てていない。**何を品質として立てるかは位相推定の実装が決める**ので、それが在るまで決めない（今決めるのは「存在しない要件への一般化」）。フィールドは確保済み。→ [wire-format.md](wire-format.md) |
 
-**バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-08、firmware側で修正・実機確認待ち。`NtpTimebase::unixUsAt()`でバッチ起点をバッチ内レコード間隔と同じ回帰から取るよう変更した)。→ [risks.md](risks.md)リスク12、[log/2026-08-08-batch-start-unified-timebase.md](log/2026-08-08-batch-start-unified-timebase.md)
+**バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-09、実機確認済み。NTPロック済み区間は`NtpTimebase::unixUsAt()`、NOMINAL区間は固定アンカー+公称fsの線形外挿で、どちらも境界dtが実質ジッタ無しになった)。→ [risks.md](risks.md)リスク12、[log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)
 
 ## 購入時に確認すること
 
