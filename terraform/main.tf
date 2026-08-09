@@ -12,8 +12,9 @@ locals {
     for id, secret in var.device_hmac_secrets : "NAMZ_HMAC_SECRET_${id}" => secret
   }
   ingest_env = merge({
-    ELBZ_BUCKET      = local.data_bucket
-    NAMZ_HMAC_SECRET = var.hmac_secret
+    ELBZ_BUCKET             = local.data_bucket
+    NAMZ_HMAC_SECRET        = var.hmac_secret
+    ELBZ_OTA_TARGET_VERSION = var.ota_target_version
   }, local.device_secret_env)
 
   # api は読み取り専用・認証なしなので HMAC 鍵は要らない。

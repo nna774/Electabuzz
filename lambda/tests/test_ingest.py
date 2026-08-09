@@ -234,3 +234,49 @@ def test_ledger_failure_does_not_fail_the_batch(h, golden, monkeypatch):
     r = h.handler(make_event(golden), None)
     assert r["statusCode"] == 200
     assert len(h._S3.puts) == 1
+
+
+# --- pull型OTA(→ docs/ota.md) --------------------------------------------
+
+def test_ota_header_absent_when_target_unset(h, golden):
+    """既定(未設定)では何も配信しない。既存デバイスの挙動を変えない。"""
+    r = h.handler(make_event(golden), None)
+    assert r["statusCode"] == 200
+    assert "X-Elbz-Ota-Version" not in r["headers"]
+
+
+def test_ota_header_present_when_target_set(h, golden, monkeypatch):
+    """設定されていれば、成功したバッチ応答のたびに便乗させる(一回性ではない)。"""
+    monkeypatch.setenv("ELBZ_OTA_TARGET_VERSION", "abc1234")
+    r = h.handler(make_event(golden), None)
+    assert r["statusCode"] == 200
+    assert r["headers"]["X-Elbz-Ota-Version"] == "abc1234"
+    # 消費しない: もう一度送っても同じ値が返り続ける。
+    r2 = h.handler(make_event(golden), None)
+    assert r2["headers"]["X-Elbz-Ota-Version"] == "abc1234"
+
+
+def test_ota_header_absent_on_quarantine(h, golden, monkeypatch):
+    """隔離(CRC不一致)経路はOTA対象外——2xxだが更新許可を出さない。"""
+    monkeypatch.setenv("ELBZ_OTA_TARGET_VERSION", "abc1234")
+    bad = corrupt_payload(golden)
+    r = h.handler(make_event(bad), None)
+    assert r["statusCode"] == 200
+    assert "X-Elbz-Ota-Version" not in r["headers"]
+
+
+def test_telemetry_headers_are_logged_not_stored(h, golden, capsys):
+    """ファームの版数・空きヒープ・稼働時間ヘッダはCloudWatchログへ出すだけ。
+
+    生存台帳が無いのでS3/DynamoDBには残らない(→ docs/ota.md)。
+    """
+    ev = make_event(golden)
+    ev["headers"]["X-Elbz-Fw-Version"] = "abc1234"
+    ev["headers"]["X-Elbz-Heap-Free"] = "123456"
+    ev["headers"]["X-Elbz-Uptime-Us"] = "987654321"
+    r = h.handler(ev, None)
+    assert r["statusCode"] == 200
+    out = capsys.readouterr().out
+    assert "fw=abc1234" in out
+    assert "heap_free=123456" in out
+    assert "uptime_us=987654321" in out

@@ -21,6 +21,21 @@ Lambda Function URL (payload v2.0) 前提。Namazu の
 | `ELBZ_BUCKET` | ここ | 保存先バケット（必須） |
 | `NAMZ_HMAC_SECRET`, `NAMZ_HMAC_SECRET_<id>` | `batch_uplink.auth` | デバイス共有鍵 |
 | `NAMZ_DEVICES_TABLE` | `batch_uplink.devices` | 生存台帳。**未設定なら台帳を書かない** |
+| `ELBZ_OTA_TARGET_VERSION` | ここ | pull型OTA(→ docs/ota.md)の配信対象バージョン。**空なら何もしない** |
+
+## pull型OTA（→ docs/ota.md）
+
+`ELBZ_OTA_TARGET_VERSION`が設定されていれば、バッチPOST成功のたびに
+`X-Elbz-Ota-Version`レスポンスヘッダとして便乗させる。一回性ではない
+——ファームのビルドバージョンと一致するまで返し続ける（デバイス側の
+自然なリトライ機構になる）。watchdog/devices台帳が無い1台構成なので、
+DynamoDB等の別経路は持たず、terraform.tfvars編集+applyだけで配信対象を
+切り替える。
+
+ファーム側は毎バッチ`X-Elbz-Fw-Version`/`X-Elbz-Heap-Free`/`X-Elbz-Uptime-Us`
+ヘッダで現在の版数・空きヒープ・稼働時間を送ってくる。生存台帳が無いので
+保存はせず、CloudWatchログに出すだけ（運用者がOTAロールアウトを見守る時の
+可観測性)。
 """
 
 from __future__ import annotations
@@ -50,8 +65,30 @@ def _s3():
     return _S3
 
 
-def _resp(code: int, msg: str):
-    return {"statusCode": code, "headers": {"content-type": "text/plain"}, "body": msg}
+def _resp(code: int, msg: str, extra_headers: dict | None = None):
+    headers = {"content-type": "text/plain"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return {"statusCode": code, "headers": headers, "body": msg}
+
+
+def _ota_headers() -> dict:
+    """pull型OTA(docs/ota.md)の配信対象バージョンヘッダ。未設定なら空。"""
+    target = os.environ.get("ELBZ_OTA_TARGET_VERSION", "")
+    return {"X-Elbz-Ota-Version": target} if target else {}
+
+
+def _log_telemetry(headers: dict, device: str) -> None:
+    """ファームが毎バッチ乗せてくるビルド版数・空きヒープ・稼働時間をログへ出す。
+
+    生存台帳が無いので保存はしない。OTAロールアウトを手元で見守る時の
+    可観測性のためだけ(→ docs/ota.md)。
+    """
+    fw = headers.get("x-elbz-fw-version", "")
+    heap = headers.get("x-elbz-heap-free", "")
+    uptime = headers.get("x-elbz-uptime-us", "")
+    if fw or heap or uptime:
+        print(f"telemetry device={device} fw={fw} heap_free={heap} uptime_us={uptime}")
 
 
 def handler(event, context):
@@ -65,6 +102,8 @@ def handler(event, context):
         auth.verify(device, raw, sig)
     except auth.AuthError as e:
         return _resp(401, f"auth: {e}")
+
+    _log_telemetry(headers, device)
 
     try:
         return _handle_batch(raw, device)
@@ -94,7 +133,7 @@ def _handle_batch(raw: bytes, auth_device: str):
                      ContentType="application/octet-stream")
 
     _record_liveness(b.header.device_id, b.header.batch_start_us, key)
-    return _resp(200, f"stored {key}")
+    return _resp(200, f"stored {key}", _ota_headers())
 
 
 def _quarantine(raw: bytes, auth_device: str, reason: str):

@@ -7,3 +7,7 @@ hmac_secret = "change-me-32bytes-random-secret" # firmware/src/secrets.h の kHm
 # device_hmac_secrets = {
 #   "1" = "..."  # kDeviceId=1 と一致させる
 # }
+
+# pull型OTA(docs/ota.md)の配信対象バージョン。tools/publish_ota.sh実行後に
+# 表示される値を書いてapplyすると配信が始まる。空文字列(既定)なら何もしない。
+# ota_target_version = "abc1234"
