@@ -35,3 +35,11 @@ lambda・firmware側の変更は無いのでテストスイートの再実行は
 「いつ」起きたかをグラフ単体で読めるようになった。これは
 [docs/progress.md](../progress.md)の着手可能タスクにある「欠測区間の可視化」の
 下地の一部になる。
+
+## デプロイ
+
+PR #27をmainへマージ後、`aws s3 sync`+CloudFront invalidationで実際の
+ダッシュボードへ反映した(**dashboardはterraform apply管理外**——
+→ [dashboard/README.md](../../dashboard/README.md))。実機の実データで
+横軸に`HH:MM:SS`の目盛が表示されることをheadless Chromeのスクリーンショットで
+確認済み。
