@@ -25,14 +25,17 @@
 // 出力は CSV。捕捉は tools/soak_capture.py を使え。
 
 #include <Arduino.h>
+#include <HTTPUpdate.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <driver/i2s.h>
 #include <esp_timer.h>
 
 #include <algorithm>
 #include <atomic>
 
+#include "DeviceIdentity.h"
 #include "Goertzel.h"
 #include "GridFreqWire.h"
 #include "LedStatus.h"
@@ -41,7 +44,12 @@
 #include "TimeSync.h"
 #include "Uploader.h"
 #include "config.h"
-#include "secrets.h"
+
+// pull型OTA(docs/ota.md)のビルドバージョン一致判定に使う。get_fw_version.pyが
+// 常に注入するが、何らかの理由で注入されなかった時のfallback。
+#ifndef ELBZ_FW_VERSION
+#define ELBZ_FW_VERSION "unknown"
+#endif
 
 namespace {
 
@@ -54,6 +62,12 @@ timebase::NtpTimebase gFs(kFsNominalMicroHz);
 timebase::MeasuringSntp gSntp;
 size_t gServerIndex = 0;
 uint32_t gNextQueryMs = 0;
+
+// WiFi SSID/パス・デバイスID・HMAC鍵・ingest URL。NVS(Preferences)からロードする
+// （旧secrets.h。コンパイル時に埋め込まない理由は docs/ota.md）。
+// ensureWifi()を呼ぶ全モード(record・soak v2)が共有し、各setup()の先頭で
+// loadDeviceIdentity()に成功してから使う。
+DeviceIdentity gIdentity;
 
 // --- I2S 側。専用タスク（Core1）が書き、Core0 が読む ---
 portMUX_TYPE gI2sMux = portMUX_INITIALIZER_UNLOCKED;
@@ -272,7 +286,7 @@ void ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) return;
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // 省電力で受信が遅れると往復遅延の分布が汚れる
-  WiFi.begin(kWifiSsid, kWifiPass);
+  WiFi.begin(gIdentity.wifiSsid.c_str(), gIdentity.wifiPass.c_str());
   const uint32_t deadline = millis() + kWifiConnectTimeoutMs;
   while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - deadline) < 0) {
     delay(200);
@@ -285,6 +299,16 @@ void ensureWifi() {
     Serial.println("# wifi connect failed");
     delay(kWifiRetryDelayMs);
   }
+}
+
+// NVSからデバイス識別情報をロードする。空(未プロビジョニング)なら起動を止める
+// ——不定なWiFi/HMAC鍵のまま動かさない（→ DeviceIdentity.h）。
+// ensureWifi()を呼ぶsetup()(record・soak v2)は、その前に必ずこれを呼ぶこと。
+void loadIdentityOrHalt() {
+  if (loadDeviceIdentity(gIdentity)) return;
+  Serial.println("# device identity not provisioned (NVS empty); halting. "
+                  "flash [env:provision] first.");
+  while (true) delay(1000);
 }
 
 void logLine(const char* server, bool ok, const char* err, const timebase::SntpSample& s,
@@ -359,6 +383,89 @@ bool gFsSourceWasNtp = false;
 uint64_t gNominalAnchorUnixUs = 0;  // 0 = 未取得
 uint64_t gNominalAnchorFrames = 0;  // アンカー取得時点のrec.framesAtEnd
 
+// --- pull型OTA（→ docs/ota.md）---
+//
+// バッチ送信レスポンスへの便乗で気づく。ingestはELBZ_OTA_TARGET_VERSION環境変数
+// (terraform)が設定されていれば、バッチPOSTのたびにこのヘッダを返す
+// （一回性ではない——デバイスのビルドバージョンと一致するまで返し続けるので、
+// 取得・書き込み失敗時の自然なリトライにもなる。Namazuと同じ設計）。
+// Uploaderは「指定したヘッダの値を読んで返す」だけの汎用API(v1.6.0)で、
+// 意味づけはここが持つ。
+constexpr const char* kOtaVersionHeader = "X-Elbz-Ota-Version";
+constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
+
+// リクエスト側に乗せて送るヘッダ。今のビルド版数・空きヒープ・起動からの経過を
+// 毎バッチingestへ渡す——GFRQのワイヤ形式(testdata/gfrq_v1_golden.hexで固定された
+// 契約)には運用情報を足さず、HTTPヘッダという別チャネルで運ぶ
+// （ingestは現状これをCloudWatchログへ出すだけで、生存台帳が無いので保存はしない）。
+constexpr const char* kFwVersionHeader = "X-Elbz-Fw-Version";
+constexpr const char* kHeapFreeHeader = "X-Elbz-Heap-Free";
+constexpr const char* kUptimeHeader = "X-Elbz-Uptime-Us";
+constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader};
+char sFwVersionBuf[32];  // setup()で一度だけ埋める(ビルド中に変わらない)
+char sHeapFreeBuf[16];   // loop()が送信直前に毎周更新する
+char sUptimeBuf[24];
+const char* kTelemetryHeaderValues[] = {sFwVersionBuf, sHeapFreeBuf, sUptimeBuf};
+
+// firmware/certs/amazon_root_ca1.pem を platformio.ini の board_build.embed_txtfiles
+// でリンクしたバイナリの先頭/終端。
+extern const uint8_t amazon_root_ca1_pem_start[] asm("_binary_certs_amazon_root_ca1_pem_start");
+extern const uint8_t amazon_root_ca1_pem_end[] asm("_binary_certs_amazon_root_ca1_pem_end");
+
+// OTA前にRAMキューをLittleFSへ退避する。フラッシュ書き込み中はキャッシュが
+// 無効になり両コアの命令フェッチが止まるため(数百ms〜数秒)、その間I2Sの
+// DMAは取りこぼしうる——それ自体はpumpI2s()のオーバーフロー検出で
+// GfrqFlagDiscontinuityとして正直に申告されるので構わないが、RAM上の
+// 送信待ちバッチはESP.restart()で消える。事前にspillへ落として
+// Uploaderの不変条件「2xxが返るまで捨てない」を守る。
+void flushBeforeOta() {
+  size_t flushed = gUploader->flushToSpill();
+  Serial.printf("# ota: flushed %u batch(es) to spill\n", static_cast<unsigned>(flushed));
+}
+
+// OTA本体を取得して書き込む。成功ならtrue(呼び出し側がESP.restart()する)。
+// TLS検証はAmazon Root CA 1を明示指定する（ダッシュボード配信のCloudFrontと
+// 同じ証明書チェーンであることをopenssl s_clientで確認済み。→ docs/ota.md）。
+bool performPullOta(const String& targetVersion) {
+  char url[256];
+  snprintf(url, sizeof(url), "%s/ota/record/%s.bin", kOtaBaseUrl, targetVersion.c_str());
+  Serial.printf("# ota: fetching %s\n", url);
+
+  WiFiClientSecure client;
+  client.setCACert(reinterpret_cast<const char*>(amazon_root_ca1_pem_start));
+  httpUpdate.rebootOnUpdate(false);  // 再起動は呼び出し側(checkAndPerformOta)で制御する
+
+  t_httpUpdate_return ret = httpUpdate.update(client, url);
+  if (ret != HTTP_UPDATE_OK) {
+    Serial.printf("# ota: failed %d (%s)\n", static_cast<int>(ret),
+                  httpUpdate.getLastErrorString().c_str());
+    return false;
+  }
+  Serial.println("# ota: write OK, restarting");
+  Serial.flush();
+  return true;
+}
+
+// バージョン不一致を見つけたら、退避→取得→(成功なら再起動/失敗ならバックオフ)
+// まで一息に行う。loop()がバッチ送信レスポンスを見た時に毎周呼ぶ。
+// バックオフが無いとloop()の周期(NTP待ちが無い時は数十ms)ごとに取得を
+// 再試行し、そのたびにflushBeforeOtaが走り続ける(Namazuが実機で踏んだ
+// 不具合と同じ原因。→ docs/ota.md「実機で踏んだ不具合」、config.hのコメント参照)。
+void checkAndPerformOta(const String& target) {
+  static int64_t sNextAttemptUs = 0;
+  if (target.length() == 0 || target == ELBZ_FW_VERSION) return;
+  const int64_t now = esp_timer_get_time();
+  if (now < sNextAttemptUs) return;
+  Serial.printf("# ota: update available %s -> %s\n", ELBZ_FW_VERSION, target.c_str());
+  flushBeforeOta();
+  if (performPullOta(target)) {
+    delay(200);
+    ESP.restart();
+  } else {
+    sNextAttemptUs = now + kOtaRetryBackoffUs;
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -367,6 +474,9 @@ void setup() {
   Serial.println();
   Serial.println("# electabuzz gridfreq record (PPS/NTPロックとも待たず開始。"
                   "timebase_sourceはgFs.source()を正直に申告)");
+  Serial.printf("# fw_version=%s\n", ELBZ_FW_VERSION);
+
+  loadIdentityOrHalt();
 
   gPrefs.begin("electabuzz", false);
   gSessionId = gPrefs.getUInt("session_id", 0) + 1;
@@ -438,8 +548,14 @@ void setup() {
 
   xTaskCreatePinnedToCore(i2sTask, "i2s_pump", 4096, nullptr, 5, nullptr, 1);
 
-  gUploader = new Uploader(kIngestUrl, /*alertUrl=*/"", kHmacSecret, kDeviceId, kMaxRamBatches,
-                            kSpillDir, /*dropOldestWhenFull=*/true);
+  // fw versionは実行中変わらないので一度だけ埋める(Uploaderはポインタを保持する
+  // だけで値をコピーしない。ヒープ/uptimeはloop()側で毎周更新する)。
+  snprintf(sFwVersionBuf, sizeof(sFwVersionBuf), "%s", ELBZ_FW_VERSION);
+
+  gUploader = new Uploader(gIdentity.ingestUrl.c_str(), /*alertUrl=*/"",
+                            gIdentity.hmacSecret.c_str(), gIdentity.deviceId, kMaxRamBatches,
+                            kSpillDir, /*dropOldestWhenFull=*/true, kOtaWatchedHeaders,
+                            1, kTelemetryHeaderNames, kTelemetryHeaderValues, 3);
   gUploader->begin();
 
   Serial.println("# recording started immediately (timebase_source=NOMINAL); "
@@ -574,7 +690,7 @@ void loop() {
 
     if (gCurrentBatch->isFull()) {
       gridfreq::HeaderFields hf;
-      hf.device_id = kDeviceId;
+      hf.device_id = gIdentity.deviceId;
       hf.session_id = gSessionId;
       hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
       hf.fs_measured_uhz = gFs.fsMicroHz();
@@ -599,10 +715,19 @@ void loop() {
     }
   }
 
+  // 送信直前にヒープ・稼働時間ヘッダを更新する（Uploaderは値をコピーせず
+  // ポインタを保持するため、pump()がPOSTする直前の値を確実に使わせるには
+  // この位置で書く必要がある）。
+  snprintf(sHeapFreeBuf, sizeof(sHeapFreeBuf), "%u", static_cast<unsigned>(ESP.getFreeHeap()));
+  snprintf(sUptimeBuf, sizeof(sUptimeBuf), "%lld", static_cast<long long>(esp_timer_get_time()));
   gUploader->pump();
   // spillに1件でも積まれている = RAMキューだけでは追いつかずLittleFSへ退避した
   // ことがある、つまり送信が実測データの生成に追いついていない兆候。
   digitalWrite(kLedSpillBacklogPin, gUploader->spillCount() > 0 ? HIGH : LOW);
+
+  // pull型OTA更新の確認（→ docs/ota.md）。同じバッチ送信レスポンスヘッダで
+  // 気づく。不一致なら取得〜書き込みまで一息に行い、完了までここでブロックする。
+  checkAndPerformOta(gUploader->lastResponseHeaderValue(kOtaVersionHeader));
 }
 
 #elif defined(NAMZ_LED_TEST)
@@ -755,6 +880,7 @@ void setup() {
   Serial.println("# boot_us,unix_us,ticks,rtt_ticks,server,ok,err,"
                  "n,rejected,span_s,source,ppm,resid_ns,fit_rms_ns,min_rtt_us,temp_c,rssi,"
                  "frames,fs_n,fs_ppm,fs_resid_ns,fs_rms_ns,ovf,l_pp,r_pp");
+  loadIdentityOrHalt();
   ensureWifi();
 }
 

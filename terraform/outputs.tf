@@ -25,3 +25,8 @@ output "dashboard_distribution_id" {
   description = "デプロイ後の create-invalidation に使う。"
   value       = aws_cloudfront_distribution.dashboard.id
 }
+
+output "devices_table" {
+  description = "デバイス生存台帳(DynamoDB)。tools/request_ota.py --table の既定値と一致させてある。"
+  value       = aws_dynamodb_table.devices.name
+}

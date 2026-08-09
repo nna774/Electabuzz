@@ -167,7 +167,10 @@ function drawFreqChart(cv, series) {
 }
 
 // --- ステータス行・品質テーブル ---
-function renderStatus(series) {
+// deviceは生存台帳(/devices、→ docs/ota.md)の該当デバイス分。取得失敗時や
+// まだ生存台帳を立てていない環境ではnull——その場合はビルド版数等の行を
+// 省くだけで、/recentが主で描くグラフ・時間基準品質の表示は妨げない。
+function renderStatus(series, device) {
   const el = document.getElementById('status');
   const latest = series.latest;
   if (!latest) {
@@ -193,6 +196,10 @@ function renderStatus(series) {
     ['時間基準の確度(1σ)', latest.tb_residual_ns + 'ns/s'],
     ['SoC温度', latest.soc_temp_c + '℃'],
   ];
+  if (device && device.fw_version) rows.push(['ビルド版数', device.fw_version]);
+  if (device && device.pending_ota_version) {
+    rows.push(['OTA', `${device.pending_ota_version} へ更新待ち`]);
+  }
   document.querySelector('#quality-table tbody').innerHTML =
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
 }
@@ -205,7 +212,14 @@ async function refresh() {
   try {
     const series = await apiGet(`/recent?minutes=${minutes}`);
     drawFreqChart(document.getElementById('freq-canvas'), series);
-    renderStatus(series);
+    // 生存台帳(/devices)は補助情報。取得できなくても(まだ立てていない環境・
+    // 一時的な失敗)メインのグラフ・ステータス表示は妨げない。
+    let device = null;
+    try {
+      const d = await apiGet('/devices');
+      device = (d.devices || []).find((x) => x.device_id === series.latest?.device_id) || d.devices?.[0] || null;
+    } catch (e) { /* 補助情報なので無視 */ }
+    renderStatus(series, device);
   } catch (e) {
     document.getElementById('status').innerHTML = `<span class="status-ng">取得失敗: ${e.message}</span>`;
   }

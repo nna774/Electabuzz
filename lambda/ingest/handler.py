@@ -20,7 +20,23 @@ Lambda Function URL (payload v2.0) 前提。Namazu の
 |---|---|---|
 | `ELBZ_BUCKET` | ここ | 保存先バケット（必須） |
 | `NAMZ_HMAC_SECRET`, `NAMZ_HMAC_SECRET_<id>` | `batch_uplink.auth` | デバイス共有鍵 |
-| `NAMZ_DEVICES_TABLE` | `batch_uplink.devices` | 生存台帳。**未設定なら台帳を書かない** |
+| `NAMZ_DEVICES_TABLE` | `batch_uplink.devices`・`ota_target` | 生存台帳兼pull型OTA配信対象。**未設定なら台帳を書かず、OTAヘッダも返さない** |
+
+## pull型OTA（→ docs/ota.md）
+
+配信対象バージョンは`NAMZ_DEVICES_TABLE`(DynamoDB)の`pending_ota_version`属性に
+持つ。`tools/request_ota.py`が直接書き込む——`ELBZ_BUCKET`同様のterraform変数
+ではなく、配信のたびにterraform applyを要求しない設計にした(→ docs/ota.md)。
+値が立っていればバッチPOST成功のたびに`X-Elbz-Ota-Version`レスポンスヘッダとして
+便乗させる。一回性ではない——ファームのビルドバージョンと一致するまで返し続ける
+（デバイス側の自然なリトライ機構になる）。一致を検出したら(`ota_target.reached_target`)
+このingestが自分で`pending_ota_version`を解放する。
+
+ファーム側は毎バッチ`X-Elbz-Fw-Version`/`X-Elbz-Heap-Free`/`X-Elbz-Uptime-Us`
+ヘッダで現在の版数・空きヒープ・稼働時間を送ってくる。`fw_version`は生存台帳へ
+保存する(ダッシュボードの`/devices`表示・OTA達成判定に使う)。heap/uptimeは
+台帳スキーマに含めておらずCloudWatchログに出すだけ（運用者がOTAロールアウトを
+見守る時の可観測性)。
 """
 
 from __future__ import annotations
@@ -34,6 +50,7 @@ import boto3
 
 from batch_uplink import auth, devices
 
+import ota_target
 import s3keys
 import wire_gridfreq
 
@@ -50,8 +67,24 @@ def _s3():
     return _S3
 
 
-def _resp(code: int, msg: str):
-    return {"statusCode": code, "headers": {"content-type": "text/plain"}, "body": msg}
+def _resp(code: int, msg: str, extra_headers: dict | None = None):
+    headers = {"content-type": "text/plain"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return {"statusCode": code, "headers": headers, "body": msg}
+
+
+def _log_telemetry(headers: dict, device: str) -> None:
+    """ファームが毎バッチ乗せてくる空きヒープ・稼働時間をログへ出す。
+
+    fw_versionは生存台帳(NAMZ_DEVICES_TABLE)へ保存する(_record_liveness)ので
+    ここでは出さない。heap/uptimeは台帳スキーマに含めていないので、OTA
+    ロールアウトを手元で見守る時の可観測性としてログに出すだけ(→ docs/ota.md)。
+    """
+    heap = headers.get("x-elbz-heap-free", "")
+    uptime = headers.get("x-elbz-uptime-us", "")
+    if heap or uptime:
+        print(f"telemetry device={device} heap_free={heap} uptime_us={uptime}")
 
 
 def handler(event, context):
@@ -66,14 +99,16 @@ def handler(event, context):
     except auth.AuthError as e:
         return _resp(401, f"auth: {e}")
 
+    _log_telemetry(headers, device)
+
     try:
-        return _handle_batch(raw, device)
+        return _handle_batch(raw, device, headers)
     except Exception as e:  # noqa: BLE001
         print(f"ingest error: {e!r}")
         return _resp(400, f"error: {e}")
 
 
-def _handle_batch(raw: bytes, auth_device: str):
+def _handle_batch(raw: bytes, auth_device: str, headers: dict):
     try:
         b = wire_gridfreq.parse(raw)
     except wire_gridfreq.CrcMismatch as e:
@@ -93,8 +128,10 @@ def _handle_batch(raw: bytes, auth_device: str):
     _s3().put_object(Bucket=os.environ["ELBZ_BUCKET"], Key=key, Body=raw,
                      ContentType="application/octet-stream")
 
-    _record_liveness(b.header.device_id, b.header.batch_start_us, key)
-    return _resp(200, f"stored {key}")
+    fw_version = headers.get("x-elbz-fw-version", "")
+    _record_liveness(b.header.device_id, b.header.batch_start_us, key, fw_version)
+    extra_headers = _ota_response_headers(b.header.device_id)
+    return _resp(200, f"stored {key}", extra_headers)
 
 
 def _quarantine(raw: bytes, auth_device: str, reason: str):
@@ -109,19 +146,49 @@ def _quarantine(raw: bytes, auth_device: str, reason: str):
     return _resp(200, f"quarantined {key}")
 
 
-def _record_liveness(device_id: int, batch_start_us: int, key: str) -> None:
+def _record_liveness(device_id: int, batch_start_us: int, key: str, fw_version: str) -> None:
     """生存台帳を更新する。**主経路ではない。**
 
     失敗してもバッチ保存自体は成功扱いにする（デバイスに無駄な再送をさせない）。
     Namazu の判断をそのまま踏襲している。
 
-    テーブル未設定なら黙って何もしない。watchdog を立てるまでは台帳の置き場が
-    無く、毎バッチ例外を吐かせても雑音にしかならない。
+    テーブル未設定なら黙って何もしない(単体テスト等、DynamoDBに触れない環境向け)。
     """
     if not os.environ.get("NAMZ_DEVICES_TABLE"):
         return
     try:
         devices.record_batch(device_id, batch_start_us,
-                             int(time.time() * 1e6), last_batch_key=key)
+                             int(time.time() * 1e6), last_batch_key=key,
+                             fw_version=fw_version)
     except Exception as e:  # noqa: BLE001
         print(f"devices.record_batch failed: {e!r}")
+
+
+def _ota_response_headers(device_id: int) -> dict:
+    """pull型OTA(→ docs/ota.md)の配信対象バージョンヘッダ。**主経路ではない。**
+
+    `pending_ota_version`が立っていなければ空。ビルドバージョンと一致済み
+    (`ota_target.reached_target`)なら、ヘッダは返さずサーバ側の状態を解放する
+    ——一致後もヘッダを返し続けると、デバイスは`target == ELBZ_FW_VERSION`の
+    早期returnで何もしないので実害は無いが、`pending_ota_version`が残り続けると
+    将来watchdogを立てた時に「達成済みなのに停滞」と誤検知する種になる。
+
+    テーブル未設定・読み書き失敗はいずれもバッチ保存自体を失敗にしない
+    （_record_livenessと同じ方針）。
+    """
+    if not os.environ.get("NAMZ_DEVICES_TABLE"):
+        return {}
+    try:
+        item = devices.get_device(device_id)
+        if not item:
+            return {}
+        pending = item.get("pending_ota_version")
+        if not pending:
+            return {}
+        if ota_target.reached_target(item):
+            ota_target.clear_ota_target(device_id, str(pending))
+            return {}
+        return {"X-Elbz-Ota-Version": str(pending)}
+    except Exception as e:  # noqa: BLE001
+        print(f"ota target check failed: {e!r}")
+        return {}
