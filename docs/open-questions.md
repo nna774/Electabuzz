@@ -20,7 +20,7 @@
 | **稼働時間(uptime)ヘッダ送信 → 再起動検知** | 実機がクラッシュ/ウォッチドッグ再起動した場合、`fw_version`が変わらない限り気づく手段が今は無い。Namazuは`esp_timer_get_time()`(マイクロ秒、事実上折り返さない)で稼働時間を測り、バッチ送信のHTTPリクエストヘッダ(`extraRequestHeaderNames`。**これも既にv1.6.0で使えるAPI**)に生値のまま乗せ、ingest側で`boot_epoch_us = batch_start_us - uptime_us`を逆算して再起動を検知している。ファームには「今何時か」を計算させず生値を送る、という設計はwire-format全体の方針(→ [wire-format.md](wire-format.md))とも合う |
 | **ビルド時バージョン埋め込み(git短縮hash)をシリアルログに出す** | OTA本体を待たずに単独で先取りできる、コストの低い改善。Namazuの`firmware/get_fw_version.py`(extra_script)が参考になる。今は実機障害時に「今動いているのはどのビルドか」をシリアルログから確認する手段が無い |
 | **heapテレメトリ(free heap / max alloc block)** | 優先度は上記より低い。Namazu側はバックフィル中の長時間クラッシュ調査という具体的な動機から実装した(CloudWatchカスタムメトリクスへ送信)。Electabuzzはまだ同種の障害を経験していないので、経験してから着手で足りる |
-| **緊急再起動ボタン(物理ボタン長押し)** | 母艦(ESP32-S3-WROOM-1 N16R8のDevKitC系ボード)にはBOOT/RSTの2つのタクトスイッチがあるのが定番。**GPIO0(BOOT)は現在Electabuzzの配線で未使用**(I2Sは`SCK`=16/`BCK`=17/`LRC`=18/`OUT`=15、→ [hardware.md](hardware.md))なので、起動後は普通のGPIOとして読める可能性がある。RST/ENはハードウェアリセット直結でソフトウェアからは検出できず、Namazuの「退避してから安全に再起動」パターンには使えない。**現物で`digitalRead(0)`が長押しに反応するか確認してから着手を判断する**(→ [2026-08-09-emergency-reboot-button-reconsidered.md](log/2026-08-09-emergency-reboot-button-reconsidered.md)) |
+| **緊急再起動ボタン(物理ボタン長押し)** | 母艦(ESP32-S3-WROOM-1 N16R8のDevKitC系ボード)のBOOTボタンは**GPIO0**、押下・離しの両方を`digitalRead(0)`で正しく検出できることを実機で確認済み(2026-08-09、→ [log/2026-08-09-led-button-hardware-probe.md](log/2026-08-09-led-button-hardware-probe.md))。RST/ENはハードウェアリセット直結でソフトウェアからは検出できず、Namazuの「退避してから安全に再起動」パターンには使えない(この判断は変わらず)。**技術的な障壁は解消した。着手するかどうかは優先度次第**——GNSS到着待ちの間の手空き作業候補ではあるが、フェーズ2(PPS)に比べれば優先度は低い |
 
 ## 設計を進めると決まること
 
