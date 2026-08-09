@@ -8,7 +8,12 @@ output "data_bucket" {
 }
 
 output "api_url" {
-  description = "dashboard/config.js の window.ELBZ_API_URL。"
+  description = "dashboard/config.js の window.ELBZ_API_URL(CloudFront経由・30秒キャッシュ)。"
+  value       = "https://${aws_cloudfront_distribution.api.domain_name}"
+}
+
+output "api_url_direct" {
+  description = "CloudFrontを経由しない生のLambda Function URL。切り分け用。"
   value       = aws_lambda_function_url.api.function_url
 }
 
