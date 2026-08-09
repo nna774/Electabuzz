@@ -70,3 +70,32 @@ static constexpr const char* kSpillDir = "/gfrq_spill";
 // timesync（システム時刻用の別SNTP、batch_start_us用）が一度に補正してよい上限。
 // 超えたらslewでなくstepで一発補正する。Namazuと同じ値。
 static constexpr uint32_t kTimeSyncStepThresholdSeconds = 10;
+
+// --- ステータス表示LED（2026-08-09 実機確認。→ docs/log/2026-08-09-led-button-hardware-probe.md）---
+//
+// オンボードのWS2812アドレッサブルRGB LED。GPIO48で実機確認済み。
+// `neopixelWrite()`（Arduino-ESP32コア組み込み、追加ライブラリ不要）で駆動する。
+static constexpr int kWs2812Pin = 48;
+// 常時点灯前提なので眩しすぎない値に絞る（0〜255）。実機で40は眩しすぎると
+// フィードバックがあり、15に下げた(2026-08-09)。
+static constexpr uint8_t kWs2812Brightness = 15;
+// 回転速度の倍率（LedStatus.h参照）。素の対応(gain=1)は実系統の変動幅
+// (数十mHzオーダー)に対して回転が遅すぎるため底上げする。20なら
+// 「1回転=0.05サイクル(50Hz系で1msの時刻偏差相当)」まで感度が上がる。
+static constexpr uint32_t kCyclesToHueGain = 20;
+
+// 外付けの単色LED、4本。WS2812は周波数偏差の連続値表示(回転)に使うので、
+// こちらは独立した二値状態それぞれに1本ずつ割り当てて役割を分ける
+// （1本に複数の意味を詰め込むと色や点滅パターンの解釈が要る。複数あるなら
+// 単純にON/OFFだけで済ませた方が遠目でも判別しやすい）。
+// いずれもdocs/hardware.mdの除外リスト（33-37/26-32/43-44/19-20/0-3-45-46/15-18）
+// に当たらない、本コード内で他に未使用のGPIO。
+// 4・5・6・7は基板シルクで隣接した1列に並んでおり、実配線がしやすい
+// (2026-08-09、現物写真で確認)。4本ともここに揃えてある。
+static constexpr int kLedTimebaseLockPin = 4;    // 緑LED前提。fsがNTPでロック済み(HIGH)/NOMINAL(LOW)
+static constexpr int kLedSpillBacklogPin = 5;    // 黄LED前提。LittleFSへのspillが溜まっている(HIGH)
+// 青LED前提。WS2812の回転方向だけでは「今速いか遅いか」が瞬時に読めない
+// というフィードバックを受けて追加(2026-08-09)。基準周波数より速い(HIGH)/
+// 遅いか同じ(LOW)。WS2812とセットで見れば「速さ(色)」と「向き(この点灯)」が揃う。
+static constexpr int kLedFastSlowPin = 6;
+static constexpr int kLedWifiPin = 7;            // 赤LED前提。切断中(HIGH)/接続中は消灯
