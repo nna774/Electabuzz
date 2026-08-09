@@ -84,5 +84,19 @@ GPIO 4・5・6・7を選んだのは、現物写真で確認したところ**基
 **明るさを上げたいなら抵抗値を下げる(150Ω程度までは安全マージン内)以外に手が無い。**
 今回は現状(220〜330Ω)で実用上十分と判断し、そのまま確定した。
 
+## 本番(`env:record`)への投入
+
+PR #24マージ後、`env:record`をビルド(secrets.hはworktreeへ手動コピー)して
+実機へ書き込んだ。書き込み直後は起動バナーの捕捉に失敗した(esptoolの
+ハードリセット直後、python側のシリアルオープンが数百ms〜1秒程度遅れ、
+起動直後の高速な出力バーストを取り逃した——実害は無い、ただのログ捕捉の
+タイミングの問題)。少し待ってから再度シリアルを覗いたところ
+`# batch enqueue: records=30 flags=0x0000 ram=0 spill=0`が正常なペース
+(約30秒に1回、windowSec=1.0×30recordsの計算通り)で出ており、
+**WiFi接続・NTP問い合わせ・バッチ送信とも正常に動作、RAMキュー滞留無し
+(`ram=0`)・spillへの退避も発生していない(`spill=0`)ことを確認した。**
+WS2812・外付け4本とも`env:ledtest`で確認済みの同じ`LedStatus`ロジックが
+実データ(`rec.cyclesQ16`)で動いている状態になった。
+
 firmware全テスト(`Goertzel`/`Timebase`/`GridFreq`/`LedStatus`)・4ビルド環境
 (`s3`/`gridfreqtest`/`record`/`ledtest`)全緑。

@@ -99,3 +99,9 @@ static constexpr int kLedSpillBacklogPin = 5;    // 黄LED前提。LittleFSへ�
 // 遅いか同じ(LOW)。WS2812とセットで見れば「速さ(色)」と「向き(この点灯)」が揃う。
 static constexpr int kLedFastSlowPin = 6;
 static constexpr int kLedWifiPin = 7;            // 赤LED前提。切断中(HIGH)/接続中は消灯
+
+// GPIO8は同じ列(4/5/6/7の続き)にあり配線しやすいので、フェーズ2(PPS)で
+// 「PPSロック済み」を示すLED用に予約してある。**PPS信号自体は既存I2Sの
+// Rチャンネルに載る設計(→ docs/timebase.md)なので新規GPIOは要らない**——
+// 要るのはロック状態を示す表示用の1本だけ。フェーズ2のコードが無い今は
+// 未使用のまま。他用途に転用しないこと。
