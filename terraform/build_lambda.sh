@@ -27,6 +27,7 @@ build_ingest() {
   cp "$LAMBDA/ingest/handler.py" "$stage/handler.py"
   cp "$LAMBDA/s3keys.py" "$stage/s3keys.py"
   cp "$LAMBDA/wire_gridfreq.py" "$stage/wire_gridfreq.py"
+  cp "$LAMBDA/ota_target.py" "$stage/ota_target.py"
   # 送信基盤の共通部分(auth/devices)。boto3はLambdaランタイムに同梱済みなので
   # ここでは入れない。numpyも不要（wire_gridfreq/s3keysはstdlibのみ）。
   # **タグで pin する。** #master にすると firmware 側の変更が黙って混入する。
@@ -44,7 +45,10 @@ build_api() {
   cp "$LAMBDA/s3keys.py" "$stage/s3keys.py"
   cp "$LAMBDA/wire_gridfreq.py" "$stage/wire_gridfreq.py"
   cp "$LAMBDA/store_gridfreq.py" "$stage/store_gridfreq.py"
-  # api は認証しないので batch_uplink(auth/devices) は不要。numpyも不要。
+  # /devices が devices.list_devices/get_device (batch_uplink) を読むので同梱する。
+  # authは使わない(apiは認証しない)が、batch_uplinkはパッケージ単位でしか配れない。
+  "$PY" -m pip install --quiet --no-deps \
+    --target "$stage" "git+https://github.com/nna774/batch-uplink@$UPLINK_VERSION" >/dev/null
   find "$stage" -name '__pycache__' -type d -prune -exec rm -rf {} +
   (cd "$stage" && zip -qr "$BUILD/api.zip" .)
   echo "built $BUILD/api.zip"

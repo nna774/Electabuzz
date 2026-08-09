@@ -38,41 +38,48 @@ Electabuzzの実機も置く予定なので、push型を作るコストが実益
 | LittleFS(spiffs) | appパーティションとは別領域なので、OTAしても`/gfrq_spill`の退避バッチは消えない |
 | 失敗の検知 | **無い。** watchdog Lambda自体がまだ無い(→フェーズ9)。今は`tools/publish_ota.sh`実行者がシリアルログを見て確認する運用に留まる |
 
-## 3. トリガー: バッチ送信レスポンスへの便乗（DynamoDB・watchdogは使わない）
+## 3. トリガー: バッチ送信レスポンスへの便乗（デバイス生存台帳・DynamoDB）
 
-Namazuの「バッチ送信レスポンスへの便乗」パターン自体は踏襲するが、
-**ターゲットバージョンの置き場所はDynamoDBではなくterraformの環境変数**にした。
-理由: Namazuの`pending_ota_version`はデバイス単位のロールアウト（複数台に
-段階的に配る）を表現するための状態で、Electabuzzは実機1台・2号機の予定も
-無いフラット構成なので、その表現力が要らない。**存在しない要件への一般化を
-しない**という方針（→ [batch-uplink.md](batch-uplink.md)）にも合う。
+Namazuの「バッチ送信レスポンスへの便乗」パターンをそのまま踏襲する。
+**当初はterraformの環境変数(`ota_target_version`)で配信対象を持つ設計にした
+が、配信のたびにterraform applyを要求するのは大袈裟と判明し、Namazuと同じ
+DynamoDBの`pending_ota_version`方式に切り替えた**（2026-08-09、実機で
+terraform var方式を1回動かした直後に判断を覆した。経緯は
+[log/2026-08-09-ota-devices-table.md](log/2026-08-09-ota-devices-table.md)）。
+併せて、ダッシュボードで現在のビルド版数を見たいという要望もあり、
+`NAMZ_DEVICES_TABLE`(デバイス生存台帳)を新設して両方を一度に満たした。
+
+台帳の書き手・読み手はNamazuと共有の`batch_uplink.devices`モジュール
+（`record_batch()`/`get_device()`/`list_devices()`）。`pending_ota_version`
+自体の達成検知・解放はプロジェクト固有の概念なので、Namazuの
+`lambda/common/ota_watch.py`と同じ考え方で`lambda/ota_target.py`に
+持つ（共有ライブラリには置かない）。
 
 ```
-terraform.tfvars: ota_target_version = "<gitの短縮hash>"
-        ↓ terraform apply
-ingest Lambdaの環境変数 ELBZ_OTA_TARGET_VERSION
-        ↓ 毎バッチPOSTの成功レスポンスに便乗
+tools/request_ota.py request <device_id> <version>
+        ↓ DynamoDB(electabuzz-devices)の pending_ota_version を直接更新
+ingestが毎バッチPOSTのレスポンスへ便乗
 レスポンスヘッダ X-Elbz-Ota-Version: <version>
         ↓ Uploader::lastResponseHeaderValue()で読む(batch-uplink v1.6.0の既存API)
 ファームがELBZ_FW_VERSIONと比較、不一致なら取得・書き込み
 ```
 
-**消費しない。** Namazuの`X-Namz-Ota-Version`と同じく「あるべき状態」として
-扱うので、ingestはデバイスのビルドバージョンと一致するかどうかに関わらず、
-`ELBZ_OTA_TARGET_VERSION`が設定されている限り毎回このヘッダを返す。
-ファームのビルドバージョンと一致した時点でファーム側が自然に更新をやめる
-（`checkAndPerformOta()`が`target == ELBZ_FW_VERSION`で早期returnする）。
+**消費しない。** Namazuの`pending_ota_version`と同じく「あるべき状態」として
+扱うので、ingestはこのヘッダを、ファームのビルドバージョンと一致するまで
+返し続ける。一致を検出したら(`ota_target.reached_target()`)、ingestが自分で
+`pending_ota_version`を解放する——さもないと達成後も台帳に残り続け、将来
+watchdogを立てた時に「達成済みなのに停滞」と誤検知する種になる。
 取得・書き込み失敗時の自然なリトライにもなる。
 
-配信を止める/戻すのも同じ経路——`terraform.tfvars`の`ota_target_version`を
-空文字列に戻すかロールバック先のバージョンに書き換えてapplyする。
+配信を止める/戻すのも同じ経路——`tools/request_ota.py cancel <device_id>`、
+または`request`を別バージョンで打ち直す。
 
 **watchdogによる停滞検知は作らない。** Namazuはこれを「証明書検証失敗の
 ような問題が起きても、デバイスは黙ってバックオフ・リトライを繰り返すだけ
-になる」ことへの保険として追加したが、Electabuzzは`request_ota.py list`
-相当のツールも生存台帳も無い1台構成で、`tools/publish_ota.sh`実行者が
-シリアルログを直接見る運用を前提にしている。停滞に気づく手段が欲しく
-なったら、それはwatchdog Lambda自体(フェーズ9)の話としてまとめて作る。
+になる」ことへの保険として追加したが、Electabuzzはwatchdog Lambda自体が
+まだ無い(フェーズ9)1台構成で、`tools/request_ota.py list`で手元から照会し、
+必要ならシリアルログを直接見る運用を前提にしている。停滞検知が欲しく
+なったら、それはwatchdog Lambda自体の話としてまとめて作る。
 
 ### テレメトリ: ビルド版数・空きヒープ・稼働時間も同じ便乗で送る
 
@@ -82,12 +89,13 @@ OTAのトリガーに使う`extraRequestHeaderNames`機構は、他の運用情�
 
 | ヘッダ | 内容 | 用途 |
 |---|---|---|
-| `X-Elbz-Fw-Version` | `ELBZ_FW_VERSION`(ビルド時のgit短縮hash) | 実機障害時に「今動いているのはどのビルドか」を確認できる |
+| `X-Elbz-Fw-Version` | `ELBZ_FW_VERSION`(ビルド時のgit短縮hash) | 生存台帳の`fw_version`として保存。ダッシュボードの`/devices`表示・OTA達成判定に使う |
 | `X-Elbz-Heap-Free` | `ESP.getFreeHeap()` | 実機の健全性の粗い指標 |
 | `X-Elbz-Uptime-Us` | `esp_timer_get_time()`の生値 | 再起動の有無を後から見分けられる(ただし`boot_epoch_us`への逆算はまだ未実装。→ [open-questions.md](open-questions.md)) |
 
-ingestはこれらをCloudWatchログへ出すだけ(`_log_telemetry()`)。生存台帳が
-無いのでS3/DynamoDBには保存しない——**OTAロールアウトを手元で見守る時の
+`fw_version`は生存台帳(DynamoDB)へ保存し、`api`の`/devices`・ダッシュボード
+から見える。heap/uptimeは台帳スキーマに含めておらず、ingestがCloudWatch
+ログへ出すだけ(`_log_telemetry()`)——**OTAロールアウトを手元で見守る時の
 可観測性のためだけ**の実装で、恒久的なダッシュボード表示は想定していない。
 
 ## 4. バイナリの秘密情報の分離（NVS化）
@@ -190,11 +198,13 @@ Namazuが実機で踏んだ「バックオフ無しだとloop周期ごとに取�
 
 ## 8. 未決事項・既知の割り切り
 
-- **pull型OTA本体(バイナリ取得〜書き込み〜再起動)の実機確認はまだ。**
-  `tools/publish_ota.sh`でダミーのバージョンを公開し、`terraform.tfvars`の
-  `ota_target_version`で配信して実際に取得・書き込み・再起動まで通ることを
-  確認する（NVS化・テレメトリは2026-08-09に確認済み。→
-  [log/2026-08-09-ota-hardware-deploy.md](log/2026-08-09-ota-hardware-deploy.md)）。
+- **pull型OTA本体(バイナリ取得〜書き込み〜再起動)は2026-08-09に実機で確認済み**
+  （`tools/publish_ota.sh`→`tools/request_ota.py request`→取得・書き込み・
+  再起動・新バージョンでの起動まで一通り成功。→
+  [log/2026-08-09-ota-pull-live-test.md](log/2026-08-09-ota-pull-live-test.md)）。
+  **ただしその回はterraform var方式で試しており、DynamoDB方式への切り替え後の
+  実機確認はまだ**（トリガーの経路が変わっただけで、ファーム側の受け取り方
+  (`X-Elbz-Ota-Version`ヘッダを読む)は変えていないので大きな差分は無い見込み）。
 - **ロールバックは実装していない。** Arduino coreの既定ビルドは
   `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`が入っておらず、新イメージは
   書けた時点で有効扱いになる。最後の砦は物理アクセス(Namazuと同じ判断)。

@@ -11,8 +11,9 @@
 #   tools/publish_ota.sh --allow-dirty   # 未コミットの変更があっても公開する
 #
 # 公開しただけでは配らない。実際にデバイスへ配信するには別途:
-#   terraform.tfvars の ota_target_version に表示されたバージョンを書いて
-#   terraform apply（→ docs/ota.md）。
+#   python tools/request_ota.py request <device_id> <表示されたバージョン>
+# （配信対象はterraformではなくDynamoDB(生存台帳)に直接書く。配信のたびに
+#   terraform applyを要求しない設計にしてある → docs/ota.md）。
 
 set -euo pipefail
 
@@ -67,4 +68,4 @@ aws s3 cp "$BIN_PATH" "s3://$BUCKET/$KEY_PREFIX.bin"
 aws s3 cp "$BIN_PATH.sha256" "s3://$BUCKET/$KEY_PREFIX.sha256"
 
 echo "# done. 次はデバイスへ配信を許可する:"
-echo "#   terraform.tfvars に ota_target_version = \"$FW_VERSION\" と書いて terraform apply"
+echo "#   python tools/request_ota.py request <device_id> $FW_VERSION"

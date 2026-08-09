@@ -36,6 +36,21 @@ data "aws_iam_policy_document" "lambda" {
       "${aws_s3_bucket.data.arn}/*",
     ]
   }
+
+  # デバイス生存台帳(→ devices.tf)。ingestが書く(record_batch・OTA配信対象の
+  # 解放)、apiが読む(/devices・OTA配信対象の照会)。prefixで権限を分けない理由は
+  # 上のS3Dataと同じ——読み書きを間違えるのはコードのバグであってIAMの仕事ではない。
+  statement {
+    sid    = "Devices"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Scan",
+    ]
+    resources = [aws_dynamodb_table.devices.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {

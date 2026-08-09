@@ -55,13 +55,15 @@ GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)�
   **gitignore対象なのでこのworktreeにしか無い。本体の作業ツリーへ手でコピーが要る**
   （→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）
 - **OTA(pull型)**: `[env:provision]`でNVSへ秘密を書き込み、`main.cpp`は
-  `secrets.h`を読まなくなった。`X-Elbz-Ota-Version`ヘッダ(バッチ送信便乗)で
+  `secrets.h`を読まなくなった。配信対象は**DynamoDB(`electabuzz-devices`、
+  デバイス生存台帳)の`pending_ota_version`**に持ち、`tools/request_ota.py`で
+  操作する(terraform applyは不要)。`X-Elbz-Ota-Version`ヘッダ(バッチ送信便乗)で
   更新対象を知り、ダッシュボードと共用のS3+CloudFrontから`HTTPUpdate`で取得する。
-  ビルド版数・空きヒープ・稼働時間も同じ便乗でingestへ送りCloudWatchログに出す。
-  **NVS化・テレメトリは実機・実クラウドへ投入し疎通確認済み**（`fw_version`・
-  `wifi connected`・バッチ送信・CloudWatchのテレメトリログまで確認）。
-  **pull型OTA本体(バイナリ取得〜書き込み〜再起動)は配信対象未設定のためまだ未確認**
-  （→ [docs/ota.md](docs/ota.md)）
+  ビルド版数は生存台帳へ、空きヒープ・稼働時間はCloudWatchログへ、同じ便乗で送る。
+  `api`の`/devices`・ダッシュボードの品質テーブルからビルド版数が見える。
+  **NVS化・テレメトリ・生存台帳(DynamoDB)は実機・実クラウドへ投入し疎通確認済み。
+  pull型OTA本体はterraform var方式で1回成功済みだが、DynamoDB方式への切り替え後の
+  実機確認はまだ**（→ [docs/ota.md](docs/ota.md)）
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
