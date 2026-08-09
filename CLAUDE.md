@@ -54,13 +54,24 @@ GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)�
 - **`firmware/src/secrets.h`・`terraform/terraform.tfvars`**: 埋め済みだが
   **gitignore対象なのでこのworktreeにしか無い。本体の作業ツリーへ手でコピーが要る**
   （→ [docs/log/2026-08-07-terraform-apply-and-secrets.md](docs/log/2026-08-07-terraform-apply-and-secrets.md)）
+- **OTA(pull型)**: `[env:provision]`でNVSへ秘密を書き込み、`main.cpp`は
+  `secrets.h`を読まなくなった。配信対象は**DynamoDB(`electabuzz-devices`、
+  デバイス生存台帳)の`pending_ota_version`**に持ち、`tools/request_ota.py`で
+  操作する(terraform applyは不要)。`X-Elbz-Ota-Version`ヘッダ(バッチ送信便乗)で
+  更新対象を知り、ダッシュボードと共用のS3+CloudFrontから`HTTPUpdate`で取得する。
+  ビルド版数は生存台帳へ、空きヒープ・稼働時間はCloudWatchログへ、同じ便乗で送る。
+  `api`の`/devices`・ダッシュボードの品質テーブルからビルド版数が見える。
+  **全経路(NVS化・テレメトリ・DynamoDBトリガー・pull型OTA本体・`/devices`・
+  ダッシュボード表示)を実機・実クラウドで確認済み**（→ [docs/ota.md](docs/ota.md)）。
+  **dashboardはterraform apply管理外**——`aws s3 sync`+CloudFront invalidationの
+  デプロイが別途要る（→ [dashboard/README.md](dashboard/README.md)）
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
 firmware/lib/Timebase/test/run.sh          # 同上（回帰は Arduino 非依存）
 firmware/lib/Goertzel/test/run.sh          # 同上
 .venv/bin/python -m pytest lambda/tests    # repo 直下の .venv（Namazu と同じ形）
-.venv/bin/pio run -d firmware -e s3 -e gridfreqtest -e record  # ビルド（3 env とも実機不要）
+.venv/bin/pio run -d firmware -e s3 -e gridfreqtest -e record -e provision  # ビルド（4 env とも実機不要）
 ```
 
 ### 着手可能なタスク
@@ -71,10 +82,10 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
 （どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
-**OTA は今はやらない**——開発中のUSB挿し直しが面倒という声はあるが、着手するのは
-実際に苦になってからでよい（→ [docs/open-questions.md](docs/open-questions.md)
-「急がないがそのうちやりたいこと」）。detect・rollup・watchdog 用の terraform は
-対応する Lambda がまだ無いので書いていない（フェーズ9）。
+**OTA(pull型)は実装済み**——実機でのUSB挿し直しが面倒という声を受けて着手し、
+NVS化・ルートCA埋め込み・バッチ送信便乗トリガーまで実装したが、**実機での
+動作確認はまだ**（→ [docs/ota.md](docs/ota.md)）。detect・rollup・watchdog 用の
+terraform は対応する Lambda がまだ無いので書いていない（フェーズ9）。
 
 ## 3. 絶対に破ってはいけない不変条件
 
@@ -123,6 +134,7 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 | `GFRQ` v1 のヘッダとレコード定義 | [docs/wire-format.md](docs/wire-format.md) |
 | 累積位相を第一級データにする理由 / retention / ロールアップ | [docs/storage.md](docs/storage.md) |
 | ingest の実装の契約（応答コードと置き先・CRC不一致の隔離・環境変数） / detect / rollup | [docs/cloud.md](docs/cloud.md) |
+| OTA(pull型)の設計・NVS化・トリガー(バッチ送信便乗)・テレメトリヘッダ | [docs/ota.md](docs/ota.md) |
 | 共通ライブラリの切り出し / 流用境界の実測 / タグ pin / レポジトリ配置 | [docs/batch-uplink.md](docs/batch-uplink.md) |
 | 絶対確度をどう担保するか / 先行実装との外部照合 | [docs/verification.md](docs/verification.md) |
 | フェーズの順序 | [docs/roadmap.md](docs/roadmap.md) |

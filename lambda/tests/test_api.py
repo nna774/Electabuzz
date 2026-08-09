@@ -213,3 +213,47 @@ def test_minutes_is_clamped(h):
     for raw in ("99999", "-5", "not-a-number"):
         resp = h.handler(make_event("/recent", {"minutes": raw, "start": str(BASE_US)}), None)
         assert resp["statusCode"] == 200
+
+
+# --- /devices(生存台帳。→ docs/ota.md) -------------------------------------
+
+def test_devices_empty_when_table_unset(h):
+    """テーブル未設定(NAMZ_DEVICES_TABLE無し)なら空配列(まだ立てていない環境向け)。"""
+    resp = h.handler(make_event("/devices"), None)
+    assert resp["statusCode"] == 200
+    import json
+    assert json.loads(resp["body"]) == {"devices": []}
+
+
+def test_devices_lists_from_table(h, monkeypatch):
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "list_devices", lambda: [
+        {"device_id": 1, "fw_version": "351cd38", "last_ingest_at_us": 1_750_000_000_000_000,
+         "last_batch_start_us": 1_749_999_970_000_000, "batches_total": 42,
+         "pending_ota_version": "abc1234"},
+    ])
+    resp = h.handler(make_event("/devices"), None)
+    assert resp["statusCode"] == 200
+    import json
+    body = json.loads(resp["body"])
+    d, = body["devices"]
+    assert d["device_id"] == 1
+    assert d["fw_version"] == "351cd38"
+    assert d["last_ingest_at_us"] == 1_750_000_000_000_000
+    assert d["batches_total"] == 42
+    assert d["pending_ota_version"] == "abc1234"
+    assert d["staleness_s"] is not None
+
+
+def test_devices_omits_optional_fields_when_absent(h, monkeypatch):
+    """新規デバイス(初回バッチ直後)はfw_version/pending_ota_versionが無い状態もある。"""
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "list_devices", lambda: [
+        {"device_id": 1, "last_ingest_at_us": 1_750_000_000_000_000},
+    ])
+    resp = h.handler(make_event("/devices"), None)
+    import json
+    d, = json.loads(resp["body"])["devices"]
+    assert d["fw_version"] is None
+    assert d["pending_ota_version"] is None
+    assert d["last_batch_start_us"] is None

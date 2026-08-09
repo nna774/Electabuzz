@@ -12,12 +12,15 @@ locals {
     for id, secret in var.device_hmac_secrets : "NAMZ_HMAC_SECRET_${id}" => secret
   }
   ingest_env = merge({
-    ELBZ_BUCKET      = local.data_bucket
-    NAMZ_HMAC_SECRET = var.hmac_secret
+    ELBZ_BUCKET        = local.data_bucket
+    NAMZ_HMAC_SECRET   = var.hmac_secret
+    NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
   }, local.device_secret_env)
 
   # api は読み取り専用・認証なしなので HMAC 鍵は要らない。
+  # NAMZ_DEVICES_TABLE は /devices の読み取り(devices.list_devices/get_device)に使う。
   api_env = {
-    ELBZ_BUCKET = local.data_bucket
+    ELBZ_BUCKET        = local.data_bucket
+    NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
   }
 }

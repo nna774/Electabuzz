@@ -71,6 +71,21 @@ static constexpr const char* kSpillDir = "/gfrq_spill";
 // 超えたらslewでなくstepで一発補正する。Namazuと同じ値。
 static constexpr uint32_t kTimeSyncStepThresholdSeconds = 10;
 
+// --- pull型OTA（→ docs/ota.md）---
+//
+// ダッシュボード配信で使っている既存のS3+CloudFrontに`ota/`プレフィックスで
+// 相乗りする。秘密ではなく公開URL（ダッシュボード自体が認証なし公開）なので、
+// NVSではなくコンパイル時定数で持つ——secrets.hに置く必要がない
+// （デバイス個体差ではなくデプロイ差に属する値で、Electabuzzは2号機の予定が
+// 無いフラット構成なので、ここに直接書いても複数デバイスへの秘密流出は起きない）。
+// terraformでdashboardを作り直すとURLが変わるので、その時だけ更新が要る。
+static constexpr const char* kOtaBaseUrl = "https://d749zv0enwqn1.cloudfront.net";
+// バージョン不一致を見つけてから取得に失敗した場合の再試行間隔。
+// バックオフ無しだとloop()の周期(50ms)ごとに取得を再試行し、そのたびにRAMキューを
+// spillへ退避する処理が走り続けて実測に影響しうる（Namazuが実機で踏んだ不具合と
+// 同じ原因。→ docs/ota.md「実機で踏んだ不具合」）。
+static constexpr int64_t kOtaRetryBackoffUs = 60LL * 1000000LL;
+
 // --- ステータス表示LED（2026-08-09 実機確認。→ docs/log/2026-08-09-led-button-hardware-probe.md）---
 //
 // オンボードのWS2812アドレッサブルRGB LED。GPIO48で実機確認済み。
