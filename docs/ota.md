@@ -1,12 +1,11 @@
 # OTA更新
 
-ファームの無線更新。2026-08-09に実装した。**NVS化・テレメトリは実機・実クラウドへ
-投入し疎通確認済み**（`[env:provision]`→`[env:record]`で実機へ書き込み、NVSからの
-WiFi/HMAC鍵読み込み・バッチ送信・`terraform apply`後のCloudWatchテレメトリログ
-まで確認。→ [log/2026-08-09-ota-hardware-deploy.md](log/2026-08-09-ota-hardware-deploy.md)）。
-**pull型OTA本体(バイナリ取得〜書き込み〜再起動)は配信対象未設定のためまだ未確認**
-（`firmware/lib/*/test/run.sh`全種・`pio run`全env(s3/gridfreqtest/record/provision)・
-`.venv/bin/python -m pytest lambda/tests`は確認済み）。
+ファームの無線更新。2026-08-09に実装した。**NVS化・テレメトリ・pull型OTA本体・
+DynamoDBトリガー・`/devices`・ダッシュボードの版数表示まで、全経路を実機・
+実クラウドで確認済み**（→ [log/2026-08-09-ota-hardware-deploy.md](log/2026-08-09-ota-hardware-deploy.md)、
+[log/2026-08-09-ota-devices-table-live-test.md](log/2026-08-09-ota-devices-table-live-test.md)）。
+firmware全テスト・`pio run`全env(s3/gridfreqtest/record/provision)・
+lambdaテストも全緑。
 
 着手理由は「開発中に何度もUSBで挿し直すのが面倒になった」で、
 [open-questions.md](open-questions.md)が定めていた着手条件そのもの。
@@ -198,13 +197,14 @@ Namazuが実機で踏んだ「バックオフ無しだとloop周期ごとに取�
 
 ## 8. 未決事項・既知の割り切り
 
-- **pull型OTA本体(バイナリ取得〜書き込み〜再起動)は2026-08-09に実機で確認済み**
-  （`tools/publish_ota.sh`→`tools/request_ota.py request`→取得・書き込み・
-  再起動・新バージョンでの起動まで一通り成功。→
-  [log/2026-08-09-ota-pull-live-test.md](log/2026-08-09-ota-pull-live-test.md)）。
-  **ただしその回はterraform var方式で試しており、DynamoDB方式への切り替え後の
-  実機確認はまだ**（トリガーの経路が変わっただけで、ファーム側の受け取り方
-  (`X-Elbz-Ota-Version`ヘッダを読む)は変えていないので大きな差分は無い見込み）。
+- **pull型OTA本体(バイナリ取得〜書き込み〜再起動)、DynamoDB方式でのトリガー、
+  `/devices`、ダッシュボードの版数表示——全経路を2026-08-09に実機・実クラウドで
+  確認済み。** `tools/publish_ota.sh`→`tools/request_ota.py request`→取得・
+  書き込み・再起動・新バージョンでの起動・DynamoDBの`pending_ota_version`自動解放・
+  ダッシュボードでの「ビルド版数」表示まで一通り成功した（→
+  [log/2026-08-09-ota-devices-table-live-test.md](log/2026-08-09-ota-devices-table-live-test.md)）。
+  ダッシュボードは`terraform apply`と別に`aws s3 sync`+CloudFront invalidationの
+  デプロイが要る点を実際に踏んで確認した（→ [dashboard/README.md](../dashboard/README.md)）。
 - **ロールバックは実装していない。** Arduino coreの既定ビルドは
   `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`が入っておらず、新イメージは
   書けた時点で有効扱いになる。最後の砦は物理アクセス(Namazuと同じ判断)。

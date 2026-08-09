@@ -61,9 +61,10 @@ GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)�
   更新対象を知り、ダッシュボードと共用のS3+CloudFrontから`HTTPUpdate`で取得する。
   ビルド版数は生存台帳へ、空きヒープ・稼働時間はCloudWatchログへ、同じ便乗で送る。
   `api`の`/devices`・ダッシュボードの品質テーブルからビルド版数が見える。
-  **NVS化・テレメトリ・生存台帳(DynamoDB)は実機・実クラウドへ投入し疎通確認済み。
-  pull型OTA本体はterraform var方式で1回成功済みだが、DynamoDB方式への切り替え後の
-  実機確認はまだ**（→ [docs/ota.md](docs/ota.md)）
+  **全経路(NVS化・テレメトリ・DynamoDBトリガー・pull型OTA本体・`/devices`・
+  ダッシュボード表示)を実機・実クラウドで確認済み**（→ [docs/ota.md](docs/ota.md)）。
+  **dashboardはterraform apply管理外**——`aws s3 sync`+CloudFront invalidationの
+  デプロイが別途要る（→ [dashboard/README.md](dashboard/README.md)）
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
