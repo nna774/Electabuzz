@@ -1,6 +1,10 @@
 # OTA更新
 
-ファームの無線更新。2026-08-09に実装した。**実機での動作確認はまだ**
+ファームの無線更新。2026-08-09に実装した。**NVS化・テレメトリは実機・実クラウドへ
+投入し疎通確認済み**（`[env:provision]`→`[env:record]`で実機へ書き込み、NVSからの
+WiFi/HMAC鍵読み込み・バッチ送信・`terraform apply`後のCloudWatchテレメトリログ
+まで確認。→ [log/2026-08-09-ota-hardware-deploy.md](log/2026-08-09-ota-hardware-deploy.md)）。
+**pull型OTA本体(バイナリ取得〜書き込み〜再起動)は配信対象未設定のためまだ未確認**
 （`firmware/lib/*/test/run.sh`全種・`pio run`全env(s3/gridfreqtest/record/provision)・
 `.venv/bin/python -m pytest lambda/tests`は確認済み）。
 
@@ -186,9 +190,11 @@ Namazuが実機で踏んだ「バックオフ無しだとloop周期ごとに取�
 
 ## 8. 未決事項・既知の割り切り
 
-- **実機での動作確認はまだ。** 次回訪問時、`tools/publish_ota.sh`でダミーの
-  バージョンを公開し、`terraform.tfvars`の`ota_target_version`で配信して
-  実際に取得・書き込み・再起動まで通ることを確認する。
+- **pull型OTA本体(バイナリ取得〜書き込み〜再起動)の実機確認はまだ。**
+  `tools/publish_ota.sh`でダミーのバージョンを公開し、`terraform.tfvars`の
+  `ota_target_version`で配信して実際に取得・書き込み・再起動まで通ることを
+  確認する（NVS化・テレメトリは2026-08-09に確認済み。→
+  [log/2026-08-09-ota-hardware-deploy.md](log/2026-08-09-ota-hardware-deploy.md)）。
 - **ロールバックは実装していない。** Arduino coreの既定ビルドは
   `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`が入っておらず、新イメージは
   書けた時点で有効扱いになる。最後の砦は物理アクセス(Namazuと同じ判断)。

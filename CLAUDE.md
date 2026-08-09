@@ -58,7 +58,10 @@ GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)�
   `secrets.h`を読まなくなった。`X-Elbz-Ota-Version`ヘッダ(バッチ送信便乗)で
   更新対象を知り、ダッシュボードと共用のS3+CloudFrontから`HTTPUpdate`で取得する。
   ビルド版数・空きヒープ・稼働時間も同じ便乗でingestへ送りCloudWatchログに出す。
-  **実装済みだが実機での動作確認はまだ**（→ [docs/ota.md](docs/ota.md)）
+  **NVS化・テレメトリは実機・実クラウドへ投入し疎通確認済み**（`fw_version`・
+  `wifi connected`・バッチ送信・CloudWatchのテレメトリログまで確認）。
+  **pull型OTA本体(バイナリ取得〜書き込み〜再起動)は配信対象未設定のためまだ未確認**
+  （→ [docs/ota.md](docs/ota.md)）
 
 ```sh
 firmware/lib/GridFreq/test/run.sh          # 実機も PlatformIO も要らない
