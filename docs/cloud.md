@@ -73,6 +73,16 @@ device も**署名検証に通った名乗り**を使い、本文の値は信用
 S3スキャン量に上限を付けている）の瞬時周波数の時系列を返す。`start`指定時は
 `[start-minutes, start]`。
 
+**Lambda Function URLの手前にCloudFront(`terraform/api_cache.tf`)を挟み、
+`minutes`/`start`をキーに30秒固定TTLでキャッシュしている**(2026-08-09、
+→ [log/2026-08-09-api-cloudfront-cache.md](log/2026-08-09-api-cloudfront-cache.md))。
+GFRQのバッチは30秒に1本しか増えないので、これは鮮度を犠牲にしていない——
+「同時に何人見ていようとオリジン(Lambda→S3)へのアクセス頻度をほぼ一定に保つ」
+ためのキャッシュで、認証なし公開のエンドポイントを閲覧人数の増加に対して
+安全にする設計上の要石。`dashboard/config.js`の`window.ELBZ_API_URL`は
+`terraform output api_url`(CloudFront経由)を使う。生のFunction URLは
+`api_url_direct`として切り分け用に残っている。
+
 **detect/rollup/生存台帳がまだ無いので、Namazuの`api`と違って`/events`・
 `/devices`は無い。** `/recent`の`latest`(系列末尾点)に`timebase_source`・
 `fs_measured_hz`・`tb_residual_ns`等の品質を載せており、ダッシュボードの
