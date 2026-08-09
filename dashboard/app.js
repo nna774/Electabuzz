@@ -23,6 +23,12 @@ function themeColor(varName) {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
 }
 
+// t_us(unixマイクロ秒)をブラウザのローカル時刻でHH:MM:SS表示する。
+// 表示範囲は最大30分(→#minutes)なので日付をまたぐ表示は不要。
+function formatClock(t_us) {
+  return new Date(t_us / 1000).toLocaleTimeString('ja-JP', { hour12: false });
+}
+
 // --- Canvas 描画。外部ライブラリなし(vanilla Canvas 2D) ---
 const PAD = 32;
 
@@ -100,6 +106,23 @@ function drawFreqChart(cv, series) {
   ctx.fillText(yMaxLabel, padLeft - 4, PAD + 4);
   ctx.fillText(yMinLabel, padLeft - 4, PAD + plotH);
   ctx.fillText(fNomLabel, padLeft - 4, y(fNom) + 4);
+  ctx.textAlign = 'left';
+
+  // 横軸(時刻)の目盛。プロット幅に収まる本数だけ等間隔に引き、
+  // 両端は画面外にはみ出さないよう左/右寄せにする(縦軸ラベルと同じ配慮)。
+  const tickCount = Math.max(2, Math.min(6, Math.floor(plotW / 80) + 1));
+  ctx.fillStyle = fg;
+  ctx.strokeStyle = line;
+  for (let i = 0; i < tickCount; i++) {
+    const t = t0 + ((t1 - t0) * i) / (tickCount - 1);
+    const px = x(t);
+    ctx.beginPath();
+    ctx.moveTo(px, PAD + plotH);
+    ctx.lineTo(px, PAD + plotH + 4);
+    ctx.stroke();
+    ctx.textAlign = i === 0 ? 'left' : i === tickCount - 1 ? 'right' : 'center';
+    ctx.fillText(formatClock(t), px, PAD + plotH + 16);
+  }
   ctx.textAlign = 'left';
 
   // 生の周波数の折れ線。null(欠測・不連続)をまたぐところは線をつながない。
