@@ -30,10 +30,12 @@
 #include <driver/i2s.h>
 #include <esp_timer.h>
 
+#include <algorithm>
 #include <atomic>
 
 #include "Goertzel.h"
 #include "GridFreqWire.h"
+#include "LedStatus.h"
 #include "MeasuringSntp.h"
 #include "NtpTimebase.h"
 #include "TimeSync.h"
@@ -372,6 +374,18 @@ void setup() {
   gPrefs.end();
   Serial.printf("# session_id=%u\n", gSessionId);
 
+  // 物理LEDの色に「赤=警告」の慣習を合わせる: kLedWifiPinは赤LED前提で
+  // 「切断中に点灯」(問題がある時だけ光る)。他2本は緑/黄LED前提で
+  // 「その状態の時に点灯」(健全・進行中を素直に示す)。
+  pinMode(kLedWifiPin, OUTPUT);
+  pinMode(kLedTimebaseLockPin, OUTPUT);
+  pinMode(kLedSpillBacklogPin, OUTPUT);
+  pinMode(kLedFastSlowPin, OUTPUT);
+  digitalWrite(kLedWifiPin, HIGH);  // WiFi接続が確立するまでは「切断中」を表す点灯
+  digitalWrite(kLedTimebaseLockPin, LOW);
+  digitalWrite(kLedSpillBacklogPin, LOW);
+  digitalWrite(kLedFastSlowPin, LOW);
+
   ensureWifi();
   timesync::begin(kNtpServers[0], kNtpServers[1],
                    static_cast<uint64_t>(kTimeSyncStepThresholdSeconds) * 1000000ULL);
@@ -436,9 +450,11 @@ void setup() {
 void loop() {
   ensureWifi();
   if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(kLedWifiPin, HIGH);  // 赤LED: 切断中を点灯で示す
     delay(kWifiRetryDelayMs);
     return;
   }
+  digitalWrite(kLedWifiPin, LOW);  // 接続中は消灯(問題なし)
 
   if (static_cast<int32_t>(millis() - gNextQueryMs) >= 0) {
     const char* server = kNtpServers[gServerIndex];
@@ -472,6 +488,7 @@ void loop() {
     // この切り替えは通常運用でセッションに1回しか起きないので、
     // 数百バイトのリークは実害が無い。
     const bool nowNtp = gFs.source() == timebase::Source::kNtp;
+    digitalWrite(kLedTimebaseLockPin, nowNtp ? HIGH : LOW);
     if (nowNtp && !gFsSourceWasNtp) {
       gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
       const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
@@ -492,6 +509,22 @@ void loop() {
 
   WindowRecord rec;
   while (gWindowQueue != nullptr && xQueueReceive(gWindowQueue, &rec, 0) == pdTRUE) {
+    // WS2812の色更新は測定データの経路と無関係な副作用。rec.cyclesQ16は
+    // このWindowRecordが確定した時点の累積位相そのもの(→ wire-format.md)なので、
+    // 追加の状態を持たずそのまま渡せる。**測定・送信のロジックには一切影響しない。**
+    {
+      const ledstatus::Rgb c =
+          ledstatus::cyclesToColor(rec.cyclesQ16, kWs2812Brightness, kCyclesToHueGain);
+      neopixelWrite(kWs2812Pin, c.r, c.g, c.b);
+
+      // 回転方向(色の変化だけ)では「今速いか遅いか」が瞬時に読めないという
+      // フィードバックを受け、符号だけを別LEDで即座に示す。
+      gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
+      if (g != nullptr) {
+        digitalWrite(kLedFastSlowPin, g->freqHz() > gFNominalHz ? HIGH : LOW);
+      }
+    }
+
     if (gCurrentBatch == nullptr) {
       gCurrentBatch = gridfreq::newBatch();
       // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
@@ -567,6 +600,77 @@ void loop() {
   }
 
   gUploader->pump();
+  // spillに1件でも積まれている = RAMキューだけでは追いつかずLittleFSへ退避した
+  // ことがある、つまり送信が実測データの生成に追いついていない兆候。
+  digitalWrite(kLedSpillBacklogPin, gUploader->spillCount() > 0 ? HIGH : LOW);
+}
+
+#elif defined(NAMZ_LED_TEST)
+// NAMZ_LED_TEST を定義してビルドすると WiFi/I2S/NTPを一切使わず、合成した
+// 「50Hzを中心に振れる周波数偏差」を時間積分してcyclesQ16相当の累積位相を作り、
+// WS2812の色マッピング(シンクロスコープ的な回転)と外付けLEDの配線を目視確認できる。
+// 実データが要らないので実機の電波・電源状況に左右されず、brightness等を
+// config.hの値を変えながら素早く試せる。
+//
+// **本番(NAMZ_GRIDFREQ_RECORD)のcyclesQ16は毎窓+fNominalHz(整数)が乗るので
+// 常に単調増加するが、ここでは基準周波数からの偏差だけを積分している
+// (基準そのものの寄与は色に影響しない=小数部を変えないので省いてよい)。**
+// sin波を積分しているだけなので値は0以上に留まり、符号の心配は無い
+// (∫A sin(ωt)dt = (A/ω)(1-cos(ωt)) ≥ 0)。それでも念のためclampしておく。
+
+namespace {
+constexpr double kLedTestAmplitudeHz = 0.15;  // 偏差の振幅。大きめに振ってよく見えるようにする
+constexpr double kLedTestPeriodMs = 20000.0;  // 1周期20秒。ゆっくり目で追いやすい速さ
+double gSimCycles = 0.0;
+uint32_t gLastSimMs = 0;
+}  // namespace
+
+void setup() {
+  Serial.begin(kSerialBaud);
+  delay(500);
+  Serial.println();
+  Serial.println("# electabuzz led test (synthetic freq-deviation integrated to cycles, "
+                  "no WiFi/I2S/NTP)");
+  Serial.printf("# amplitude=%.3fHz period=%.0fms brightness=%u\n", kLedTestAmplitudeHz,
+                kLedTestPeriodMs, kWs2812Brightness);
+  // 外付け3本(wifi/timebase/spill)は配線確認用に点滅周期を変えて、どのGPIOが
+  // どの物理LEDか目視で対応付けられるようにする(実運用ではそれぞれ独立した
+  // 意味の二値状態)。fast/slowだけは実際の合成偏差の符号に連動させ、
+  // WS2812の回転方向と一致することを確認できるようにする。
+  Serial.printf("# led_wifi(GPIO%d)=1Hz led_timebase(GPIO%d)=0.5Hz led_spill(GPIO%d)=0.25Hz "
+                "led_fastslow(GPIO%d)=synthetic sign\n",
+                kLedWifiPin, kLedTimebaseLockPin, kLedSpillBacklogPin, kLedFastSlowPin);
+  pinMode(kLedWifiPin, OUTPUT);
+  pinMode(kLedTimebaseLockPin, OUTPUT);
+  pinMode(kLedSpillBacklogPin, OUTPUT);
+  pinMode(kLedFastSlowPin, OUTPUT);
+}
+
+void loop() {
+  const uint32_t nowMs = millis();
+  const double phase = 2.0 * PI * static_cast<double>(nowMs) / kLedTestPeriodMs;
+  const double devHz = kLedTestAmplitudeHz * sin(phase);
+
+  const double dtSec = (gLastSimMs == 0) ? 0.0 : (nowMs - gLastSimMs) / 1000.0;
+  gLastSimMs = nowMs;
+  gSimCycles = std::max(0.0, gSimCycles + devHz * dtSec);
+  const uint64_t cyclesQ16 = static_cast<uint64_t>(gSimCycles * 65536.0 + 0.5);
+
+  const ledstatus::Rgb c = ledstatus::cyclesToColor(cyclesQ16, kWs2812Brightness, kCyclesToHueGain);
+  neopixelWrite(kWs2812Pin, c.r, c.g, c.b);
+
+  digitalWrite(kLedWifiPin, (nowMs / 500) % 2);
+  digitalWrite(kLedTimebaseLockPin, (nowMs / 1000) % 2);
+  digitalWrite(kLedSpillBacklogPin, (nowMs / 2000) % 2);
+  digitalWrite(kLedFastSlowPin, devHz > 0.0 ? HIGH : LOW);
+
+  static uint32_t lastPrintMs = 0;
+  if (nowMs - lastPrintMs >= 200) {
+    lastPrintMs = nowMs;
+    Serial.printf("t=%lu dev=%.4f sim_cycles=%.4f rgb=%u,%u,%u\n", nowMs, devHz, gSimCycles, c.r,
+                  c.g, c.b);
+  }
+  delay(20);
 }
 
 #elif defined(NAMZ_GRIDFREQ_TEST)
