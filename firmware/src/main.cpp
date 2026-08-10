@@ -392,7 +392,8 @@ uint64_t gNominalAnchorFrames = 0;  // アンカー取得時点のrec.framesAtEn
 // Uploaderは「指定したヘッダの値を読んで返す」だけの汎用API(v1.6.0)で、
 // 意味づけはここが持つ。
 constexpr const char* kOtaVersionHeader = "X-Elbz-Ota-Version";
-constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
+// batch-uplink v2.0.0でnullptr終端方式になった(末尾にnullptrを置く。本数引数は無い)。
+constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader, nullptr};
 
 // リクエスト側に乗せて送るヘッダ。今のビルド版数・空きヒープ・起動からの経過を
 // 毎バッチingestへ渡す——GFRQのワイヤ形式(testdata/gfrq_v1_golden.hexで固定された
@@ -401,7 +402,9 @@ constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
 constexpr const char* kFwVersionHeader = "X-Elbz-Fw-Version";
 constexpr const char* kHeapFreeHeader = "X-Elbz-Heap-Free";
 constexpr const char* kUptimeHeader = "X-Elbz-Uptime-Us";
-constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader};
+// namesはnullptr終端(v2.0.0)。valuesは同じ本数分で終端不要。
+constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader,
+                                                  nullptr};
 char sFwVersionBuf[32];  // setup()で一度だけ埋める(ビルド中に変わらない)
 char sHeapFreeBuf[16];   // loop()が送信直前に毎周更新する
 char sUptimeBuf[24];
@@ -552,10 +555,20 @@ void setup() {
   // だけで値をコピーしない。ヒープ/uptimeはloop()側で毎周更新する)。
   snprintf(sFwVersionBuf, sizeof(sFwVersionBuf), "%s", ELBZ_FW_VERSION);
 
-  gUploader = new Uploader(gIdentity.ingestUrl.c_str(), /*alertUrl=*/"",
-                            gIdentity.hmacSecret.c_str(), gIdentity.deviceId, kMaxRamBatches,
-                            kSpillDir, /*dropOldestWhenFull=*/true, kOtaWatchedHeaders,
-                            1, kTelemetryHeaderNames, kTelemetryHeaderValues, 3);
+  // caCert: OTA取得(performPullOta)と同じAmazon Root CA 1を渡し、ingest送信も
+  // setInsecure()からTLS検証ありへ卒業する(batch-uplink v1.8.0)。
+  // discardSpillOn400: 電源断でLittleFSの退避ファイルが0バイト/途中で切れた場合、
+  // wire_gridfreq.parse()は「too short for header」のWireFormatErrorを投げ、
+  // ingestのhandler()はCrcMismatch以外のWireFormatErrorを汎用exceptで拾って
+  // 400を返す(lambda/ingest/handler.py)。この機体は測定対象の電源そのものに
+  // 給電されており、退避ファイル破損の起きやすさはNamazuより高いまである
+  // (→ NamazuHaUrokoGaNai docs/log/2026-08-11-spill-quarantine-on-400.md)。
+  gUploader = new Uploader(
+      gIdentity.ingestUrl.c_str(), /*alertUrl=*/"", gIdentity.hmacSecret.c_str(),
+      gIdentity.deviceId, kMaxRamBatches, kSpillDir, /*dropOldestWhenFull=*/true,
+      kOtaWatchedHeaders, kTelemetryHeaderNames, kTelemetryHeaderValues,
+      reinterpret_cast<const char*>(amazon_root_ca1_pem_start), /*maxSpillReadBytes=*/0,
+      /*discardSpillOn400=*/true);
   gUploader->begin();
 
   Serial.println("# recording started immediately (timebase_source=NOMINAL); "
