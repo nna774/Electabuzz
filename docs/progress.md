@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-12 | **GNSS(NEO-M8N)受信機が到着した。アンテナは未着(輸送中)。** アンテナ到着前に確定できる配線案(SVG図)を`hardware.md`へ追加した——UARTはGPIO1(TX)/GPIO2(RX)候補、PPSはESP32のGPIOではなくPCM1808のR chへL chと同じR1/R2/C1の分圧+LPF網をもう1組追加する案。CFG-TP5/CFG-NAV5はu-centerで一度EEPROMへ焼けば足り、firmwareが毎回送る必要はないと整理した。firmware側の不足(`PpsTimebase`未実装・R chのPPSエッジ検出無し・GNSS UART読み取りコード無し)を洗い出し、うち`PpsTimebase`はホストのg++テストだけで書けるためアンテナ非依存で最優先着手できると判断した | [log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md) |
 | 2026-08-11 | **USB無停電化(乾電池バックアップ)の回路案を検討した。** 別セッションで出た「電源マルチプレクサIC(TPS2113A系)でUSB↔乾電池を自動切替し、STATピンを停電フラグに使う」案は、[hardware.md](hardware.md)「電源」節にある未詳細化の「小型UPSを挟む」計画を具体化するものと判断。方向性は妥当だが、**マルチプレクサICの入力電圧下限次第で昇圧コンバータ自体が不要かもしれない**・**昇圧を常時通電すると待機中に乾電池を静かに消耗する**・**アルカリよりリチウム一次電池が待機用途に向く**の3点が未検証のまま残る。部品未確定・実装未着手 | [log/2026-08-11-usb-ups-power-mux-design.md](log/2026-08-11-usb-ups-power-mux-design.md) |
 | 2026-08-09 | **`/recent` APIをCloudFront経由にし、30秒TTLでキャッシュするようにした。** ダッシュボードにカスタムドメインを割り当て他の人にも見せる計画が出たのがきっかけ——今のLambda Function URLは認証なし・レート制限なしで、閲覧人数がそのままS3/Lambda呼び出し回数に比例する構造だった。GFRQのバッチは30秒に1本しか増えないので、30秒キャッシュは鮮度を捨てずに済む。`terraform/api_cache.tf`新設、`outputs.tf`の`api_url`はCloudFront経由に変更(生のURLは`api_url_direct`)。`terraform validate`緑。**このworktreeに`tfvars`が無いため`apply`はまだ**(マージ後に実行) | [log/2026-08-09-api-cloudfront-cache.md](log/2026-08-09-api-cloudfront-cache.md) |
 | 2026-08-09 | **ダッシュボードグラフに横軸(時刻)の目盛を追加した。** これまで枠線だけで時刻の数値が出ておらず、グラフのどの位置がいつのデータか目視でわからなかった。`t_us`をローカル時刻の`HH:MM:SS`に整形して等間隔に描くようにし、本数はプロット幅から動的に決めて狭い画面でも重ならないようにした。lambda・firmware側の変更は無い | [log/2026-08-09-dashboard-xaxis-time-labels.md](log/2026-08-09-dashboard-xaxis-time-labels.md) |
@@ -69,8 +70,8 @@
 | | |
 |---|---|
 | 確定済み | AC入力部（実測済み）、wire format `GFRQ` v1、**[batch-uplink](https://github.com/nna774/batch-uplink) v1.6.0**（public・切り出し済み。`Batch` の契約が確定。pinはNamazu側の後方互換な追加でv1.0.0から上げてある → [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)）、**AFEのC1(LPF)は15nFで確定・実装・実測確認済み**（→ [log/2026-08-08-c1-lpf-verification.md](log/2026-08-08-c1-lpf-verification.md)） |
-| 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先） |
-| 未入手 | **アクティブアンテナ（GPS+BD+GLONASS対応品を2本発注済み。→ [log/2026-08-07-antenna-order.md](log/2026-08-07-antenna-order.md)。到着待ち）**、GNSS 受信機2台目（1台目は NEO-M8N を発注済み → [log/2026-08-04-gnss-order.md](log/2026-08-04-gnss-order.md)。**段階1の判定が出てから決める**）、AFEのTVS（**OPアンプ・C1は不要/確定になった**。→ [hardware.md](hardware.md)）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
+| 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先）、**GNSS NEO-M8N(1台目、2026-08-12到着)**。**`UBX-MON-VER`での本物確認・実配線はまだ**（配線案は [hardware.md](hardware.md)「GNSS(NEO-M8N) 配線」節、[log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md)） |
+| 未入手 | **アクティブアンテナ（GPS+BD+GLONASS対応品を2本発注済み。→ [log/2026-08-07-antenna-order.md](log/2026-08-07-antenna-order.md)。国内発送まで進んだが未着）**、GNSS 受信機2台目（1台目は到着済み → 上行。**段階1の判定が出てから決める**）、AFEのTVS（**OPアンプ・C1は不要/確定になった**。→ [hardware.md](hardware.md)）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
 | 稼働中 | フェーズ1.5のsoakは2026-08-07時点で停止済み（水晶soakの一昼夜ぶんの結果は確保済み。→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。**代わりに実配線でのfs実測が完了し、リスク10を解消した**（→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)） |
 | コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp`）で、回帰は Arduino 非依存。**位相推定は `firmware/lib/Goertzel/`**（単一ビンDFTの2次IIR再帰。Python参照実装`tools/gridfreq/goertzel.py`のC++移植）。`firmware/src/main.cpp` は3つのビルドモードを持つ: 既定(`env:s3`。soak専用、位相推定も送信もしない)、`NAMZ_GRIDFREQ_TEST`(`env:gridfreqtest`。疎通確認用の生サンプルダンプ)、**`NAMZ_GRIDFREQ_RECORD`(`env:record`。NTPロックも待たず起動直後からGoertzel+GFRQ+`Uploader`を動かす。`timebase_source`はそのバッチ時点の`gFs.source()`を正直に申告し、ロックした瞬間に規正済み`fs`で推定器を作り直す。2026-08-08〜)**。**`env:record`は実機に投入済みで、`fs`ロック後に実際にバッチを送れていることを確認した**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。**NOMINAL即記録化後のfirmwareも2026-08-08に実機書き込み済み**で、起動直後から記録が始まることを起動ログで確認した（→ [log/2026-08-08-nominal-window-deploy.md](log/2026-08-08-nominal-window-deploy.md)。**NOMINAL→NTP遷移を跨いだ実データでの確認はこれから**）。**クラウド側は `lambda/ingest/handler.py` + `lambda/api/handler.py`(`/recent`。NOMINAL区間の事後補正`freq_hz_corrected`を含む) + `lambda/store_gridfreq.py`**（`/alert`・detect・rollupは未実装）。**`dashboard/`(vanilla JS + Canvas)も実データで動作確認済み**（→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)。**NOMINAL/補正線の描画は合成データでのみ確認済みで、実データでの見た目はこれから**）。**`terraform/`はingest+api+dashboard分を書いて`apply`済み**（NOMINAL対応版のapi/ingestも2026-08-08にapply済み）。**`firmware/src/secrets.h`も埋めてある**（gitignore対象なのでworktreeからのコピーが要る）。detect/rollup/watchdogは対応するLambdaが無いのでterraformも未着手 |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.6.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh` / `firmware/lib/Goertzel/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`(`-e s3`/`-e gridfreqtest`/`-e record`)。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`。`env:record`を使うには`kDeviceId`/`kIngestUrl`/`kHmacSecret`を埋める） |
@@ -138,9 +139,15 @@
   → [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)
   → [log/2026-08-08-batch-start-frame-capture-time.md](log/2026-08-08-batch-start-frame-capture-time.md)）
 
+- **GNSS(NEO-M8N)受信機到着、アンテナ未着**（2026-08-12）。アンテナ非依存で進められる
+  範囲(`PpsTimebase`実装・GNSS UART読み取りコード・R ch AFE配線)を洗い出し、配線案を
+  `hardware.md`へ追加した。**まだ何も実装していない**
+  → [log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md)
+
 ### まだ触っていない領域
 
-**フェーズ2(PPS同時サンプリング)そのもの**（GNSS本体が未到着）。時刻偏差(TE)の絶対値・
+**フェーズ2(PPS同時サンプリング)そのもの**（GNSS受信機は到着したがアンテナ未着で、
+実配線・実測はまだ。→ 上記タスク）。時刻偏差(TE)の絶対値・
 欠測区間の可視化はPPS到着後。**`terraform/`はingest+api+dashboard分のみ**——detect/rollup/watchdogに対応する
 Lambdaがまだ無いので、それらのterraformも未着手（→ [log/2026-08-07-terraform-ingest-stack.md](log/2026-08-07-terraform-ingest-stack.md)）。
 **位相推定(Goertzel)のC++移植とGFRQ送信は2026-08-07にフェーズ2を待たずに完了した**
