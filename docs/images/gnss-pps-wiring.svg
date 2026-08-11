@@ -65,12 +65,12 @@
   <!-- ===== PPS: 新規AFE ===== -->
   <rect x="330" y="510" width="290" height="150" rx="6" fill="#eef4ff" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
   <text x="475" y="530" text-anchor="middle" font-weight="bold" fill="#1a5fb4">R ch AFE（新規・未実装）</text>
-  <text x="345" y="550" font-size="11" fill="#1a5fb4">PPS(3.3V CMOS)</text>
-  <text x="345" y="568" font-size="11" fill="#1a5fb4">  └─R1(100kΩ)─┬─R2(6.8kΩ)─ GND</text>
-  <text x="345" y="586" font-size="11" fill="#1a5fb4">              │</text>
-  <text x="345" y="604" font-size="11" fill="#1a5fb4">              ├─C1(15nF)─ GND</text>
-  <text x="345" y="622" font-size="11" fill="#1a5fb4">              └─► PCM1808 R IN</text>
-  <text x="345" y="645" font-size="10.5" fill="#1a5fb4">L chと同じ定数を流用しfcを揃える</text>
+  <text x="345" y="552" font-size="11" fill="#1a5fb4" font-family="Menlo, Consolas, monospace">PPS ──R1(100kΩ)──┬── R2(6.8kΩ) ──┬── GND</text>
+  <text x="345" y="570" font-size="11" fill="#1a5fb4" font-family="Menlo, Consolas, monospace">                    │                 │</text>
+  <text x="345" y="588" font-size="11" fill="#1a5fb4" font-family="Menlo, Consolas, monospace">                    └── C1(15nF) ─────┴──► PCM1808 R IN</text>
+  <text x="345" y="614" font-size="10.5" fill="#1a5fb4">R2とC1は同じノード(R1の先)からGNDへの並列2本。</text>
+  <text x="345" y="630" font-size="10.5" fill="#1a5fb4">R IN もそのノードを見る。L chと全く同じ回路・同じ定数。</text>
+  <text x="345" y="649" font-size="10" fill="#555">→ hardware.md「アナログフロントエンド(AFE)」の図と同一構成</text>
 
   <line x1="620" y1="585" x2="655" y2="585" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowBlue)"/>
 
