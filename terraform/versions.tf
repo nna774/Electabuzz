@@ -28,3 +28,14 @@ provider "aws" {
     }
   }
 }
+
+# CloudFront 用証明書(us-east-1 必須)向けのエイリアス。Namazuのterraform/versions.tfと同じ理由。
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+  default_tags {
+    tags = {
+      Project = var.project
+    }
+  }
+}

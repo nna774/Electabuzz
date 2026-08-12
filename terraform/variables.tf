@@ -23,3 +23,15 @@ variable "device_hmac_secrets" {
     キーはファームの kDeviceId を10進文字列にしたもの。
   EOT
 }
+
+variable "dashboard_domain" {
+  type        = string
+  default     = "electabuzz.dark-kuins.net"
+  description = "ダッシュボードのカスタムドメイン。CloudFrontのaliasにする。空ならCloudFront既定ドメイン+既定証明書のまま。"
+}
+
+variable "api_domain" {
+  type        = string
+  default     = "api.electabuzz.dark-kuins.net"
+  description = "読み取りAPIのカスタムドメイン。api_cache.tfのCloudFrontにaliasとして足す。空ならCloudFront既定ドメインのまま。"
+}
