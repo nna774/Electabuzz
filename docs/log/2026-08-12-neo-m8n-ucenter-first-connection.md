@@ -29,7 +29,8 @@ DMMでTXDピンのアイドル電圧を事前に測ってから繋ぐことを�
 
 ## UBX-MON-VERで実物を確認: 本物のu-blox M8世代シリコンと判断できた
 
-u-centorの `View > Messages View > UBX > MON > VER` で読んだ内容:
+u-centorの `View > Messages View > UBX > MON > VER` で読んだ内容
+(スクリーンショット: https://gyazo.com/1a30c1c5d2a31f8141ff2f41030b6fd4):
 
 - `ROM CORE 3.01 (107888)`
 - `FWVER=SPG 3.01`
@@ -50,7 +51,8 @@ u-centorの `View > Messages View > UBX > MON > VER` で読んだ内容:
 
 ## MON-HWの「Antenna State: OK」は鵜呑みにできないと分かった
 
-同じくMON-HWを見ると、アンテナ未接続にも関わらず `Antenna State Status: OK` /
+同じくMON-HW(スクリーンショット: https://gyazo.com/5bf1aafb554d9824e564370f0a530a6b)を
+見ると、アンテナ未接続にも関わらず `Antenna State Status: OK` /
 `Antenna Power Status: ON` と表示された。ピン設定表を見ると、アンテナ検出に
 対応するはずのANT_SHORT_N(PIO15)・ANT_SWITCH_N(PIO16)が専用ペリフェラルではなく
 単なる`PIO_IN`/`PIO_OUT`になっており、**この基板ではアンテナ検出回路が実際には
