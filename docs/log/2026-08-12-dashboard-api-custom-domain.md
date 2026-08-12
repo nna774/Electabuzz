@@ -1,4 +1,4 @@
-# ダッシュボード/APIにカスタムドメインを割り当てる作業を開始した
+# ダッシュボード/APIにカスタムドメインを割り当てた
 
 ## 経緯
 
@@ -22,12 +22,12 @@ DNS(`nna774/dark-kuins.net-dns`)は外部リポジトリ管理なので、取得
 
 なし(新規)。
 
-## 次に何が可能になったか
+## 残作業を最後まで通した
 
-DNS PRがマージされ、DNS伝播が確認できたら:
+dark-kuins.net-dns側PR([#1](https://github.com/nna774/dark-kuins.net-dns/pull/1))がmasterへ適用され、DNS(`dig`で確認)が伝播した後:
 
-1. Electabuzz側で`terraform apply`(残り: ACM検証完了待ち→両CloudFrontへの`alias`付与)
-2. `dashboard/config.js`を`https://api.electabuzz.dark-kuins.net`に差し替えて再デプロイ(→[dashboard/README.md](../../dashboard/README.md))
-3. `https://electabuzz.dark-kuins.net` / `https://api.electabuzz.dark-kuins.net`の疎通確認
+1. `terraform apply`(残り分)を実行。ACM証明書の検証が完了(ISSUED)し、両CloudFrontへの`alias`付与が通った(1 added/2 changed/0 destroyed、`Modifications complete after 2m35s`)
+2. `dashboard/config.js`の`window.ELBZ_API_URL`を`https://api.electabuzz.dark-kuins.net`に差し替え、`aws s3 sync`+CloudFront invalidationで再デプロイ
+3. `curl`で両ドメインの疎通(HTTP 200)・`config.js`の反映・`/recent`が実データを返すことを確認した
 
-apply順序の詳細は`terraform/custom_domain.tf`冒頭のコメントに残した。
+apply順序の詳細は`terraform/custom_domain.tf`冒頭のコメントに残してある。**以降の運用でドメインを覚え直す必要は無い**——`https://electabuzz.dark-kuins.net`(ダッシュボード)/`https://api.electabuzz.dark-kuins.net`(API)が正式なURL。
