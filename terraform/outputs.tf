@@ -8,8 +8,8 @@ output "data_bucket" {
 }
 
 output "api_url" {
-  description = "dashboard/config.js の window.ELBZ_API_URL(CloudFront経由・30秒キャッシュ)。"
-  value       = "https://${aws_cloudfront_distribution.api.domain_name}"
+  description = "dashboard/config.js の window.ELBZ_API_URL。カスタムドメインありならそちら、なければCloudFront経由(30秒キャッシュ)。"
+  value       = local.custom_domain_enabled ? "https://${var.api_domain}" : "https://${aws_cloudfront_distribution.api.domain_name}"
 }
 
 output "api_url_direct" {
@@ -18,8 +18,32 @@ output "api_url_direct" {
 }
 
 output "dashboard_url" {
-  description = "ダッシュボードの公開URL(CloudFront既定ドメイン)。"
-  value       = "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+  description = "ダッシュボードの公開URL。カスタムドメインありならそちら、なければCloudFront既定ドメイン。"
+  value       = local.custom_domain_enabled ? "https://${var.dashboard_domain}" : "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+}
+
+# --- カスタムドメイン用: ../dark-kuins.net-dns の records.yml へ転記する値 ---
+
+output "acm_validation_records" {
+  description = "records.yml の acm: セクションへ入れる検証用CNAME(name→value)。まずこれをCloudflareへ。"
+  value = local.custom_domain_enabled ? {
+    for o in aws_acm_certificate.custom[0].domain_validation_options :
+    o.domain_name => {
+      name  = o.resource_record_name
+      type  = o.resource_record_type
+      value = o.resource_record_value
+    }
+  } : {}
+}
+
+output "dashboard_cname_target" {
+  description = "records.yml の cname: に入れる electabuzz の向き先(CloudFrontドメイン)。"
+  value       = aws_cloudfront_distribution.dashboard.domain_name
+}
+
+output "api_cname_target" {
+  description = "records.yml の cname: に入れる api.electabuzz の向き先(CloudFrontドメイン)。"
+  value       = aws_cloudfront_distribution.api.domain_name
 }
 
 output "dashboard_bucket" {
