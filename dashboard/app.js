@@ -197,6 +197,14 @@ function renderStatus(series, device) {
     ['SoC温度', latest.soc_temp_c + '℃'],
   ];
   if (device && device.fw_version) rows.push(['ビルド版数', device.fw_version]);
+  if (device && device.staleness_s != null) {
+    // last_ingest_at_us(受信壁時計)ベース。latest.t_us(測定時刻)ベースの
+    // 「最終受信」とは別系統——バックフィル中は測定側が古いまま見えても、
+    // こちらは受信が続いているかどうかを独立に示す(→ batch_uplink.devices)。
+    const ingestClass = device.staleness_s > 60 ? 'status-ng' : 'status-ok';
+    rows.push(['受信(壁時計)', `<span class="${ingestClass}">${device.staleness_s.toFixed(0)}秒前</span>`]);
+  }
+  if (device && device.batches_total != null) rows.push(['累積受信バッチ数', device.batches_total]);
   if (device && device.pending_ota_version) {
     rows.push(['OTA', `${device.pending_ota_version} へ更新待ち`]);
   }
