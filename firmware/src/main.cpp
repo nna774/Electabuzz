@@ -40,7 +40,11 @@
 #include "GridFreqWire.h"
 #include "LedStatus.h"
 #include "MeasuringSntp.h"
+#include "NmeaGga.h"
+#include "NmeaLineReader.h"
 #include "NtpTimebase.h"
+#include "PpsEdgeDetector.h"
+#include "PpsTimebase.h"
 #include "TimeSync.h"
 #include "Uploader.h"
 #include "config.h"
@@ -85,6 +89,18 @@ QueueHandle_t gI2sQueue = nullptr;
 // std::atomic にしてあるのは、Core0（fs がロックした瞬間に生成する）から
 // Core1（i2sTask で毎回読む）への書き込みをポインタ単位で安全に見せるため。
 std::atomic<gridfreq::GoertzelEstimator*> gRecordGoertzel{nullptr};
+
+// --- PPS(方式A、R ch)。他モードでは null のままで何も起きない ---
+//
+// gRecordGoertzelと同じ「record modeでだけ非null」パターン。**一度構築したら
+// 差し替えない**——Goertzelと違い、gEdgeDetectorはfsの値に依存しない生のR ch
+// フィルタなので、NTP/PPSロックのたびに作り直す理由が無い。
+// setup()でxTaskCreatePinnedToCore(i2sTask, ...)より前に構築すること
+// （構築前にi2sTaskがfeed()を呼んでしまわないように、既存のgRecordGoertzelと
+// 同じ理由）。
+std::atomic<ppsedge::PpsEdgeDetector*> gEdgeDetector{nullptr};
+QueueHandle_t gPpsEdgeQueue = nullptr;  // Core1(検出) → Core0(回帰) への橋渡し
+
 struct WindowRecord {
   uint64_t cyclesQ16;
   // この窓が完成した**瞬間**の累積フレーム数（gFrames）。pumpI2s() が確定させる。
@@ -202,6 +218,19 @@ void pumpI2s() {
       if (r > rMax) rMax = r;
 
       // 記録モードでのみ非null。他モードはロード1回ぶんのコストで済む。
+      ppsedge::PpsEdgeDetector* edge = gEdgeDetector.load(std::memory_order_relaxed);
+      if (edge != nullptr) {
+        // **rはそのまま渡す。オフセット計算はしない。** gEdgeDetectorの内部
+        // サンプルカウンタは構築直後から1個ずつfeed()された回数を数えるだけなので、
+        // 「Goertzelと同時に、i2sTask起動前に一度だけ構築し以後resetしない」を
+        // 守っていれば、gFrames基準の絶対ティックと自動的に1対1で対応する
+        // (→ docs/log/2026-08-12-main-integration-design.md)。
+        double edgeTicks;
+        if (edge->feed(static_cast<double>(r), edgeTicks) && gPpsEdgeQueue != nullptr) {
+          xQueueSend(gPpsEdgeQueue, &edgeTicks, 0);
+        }
+      }
+
       gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
       if (g != nullptr && g->addSample(l)) {
         WindowRecord rec{};
@@ -365,6 +394,22 @@ bool gBatchDiscontinuity = false;
 // 再ロック時にまた作り直しが起きるだけでよい。
 bool gFsSourceWasNtp = false;
 
+// --- PPS(方式A)。→ docs/log/2026-08-12-main-integration-design.md ---
+//
+// gFs(NtpTimebase)と役割を分ける: gPpsはfsの精度だけを持ち、絶対時刻への固定
+// (batchStartUs)は引き続きgFsが担う。gPpsTimebaseにunixUsAt()相当を持たせて
+// いないのはこのため(→ docs/log/2026-08-12-pps-timebase-impl.md)。
+timebase::PpsTimebase gPps(kFsNominalMicroHz);
+// gFsSourceWasNtpと同じ役目の遷移検出フラグ。PPSロックの瞬間だけGoertzelを
+// (NTPロック時よりさらに精度の良いfsで)もう一段作り直す。
+bool gPpsSourceWasPps = false;
+
+// GNSS UART(Serial1)読み取り。→ firmware/lib/GnssNmea/
+gnss::NmeaLineReader gNmeaReader;
+// 直近に解析できたGGAのfix quality > 0。UBX-MON-VERはu-centerでの手動確認で
+// 足りると判断しfirmwareでは扱わない(→ docs/log/2026-08-12-gnss-nmea-impl.md)。
+bool gGnssFix = false;
+
 // NOMINAL区間のバッチ起点計算用アンカー。**timesync::isSynced()が初めてtrueに
 // なった瞬間に遅延取得する**(0 = 未取得)。setup()の時点で無条件に読むと、
 // SNTPの初回同期がまだ済んでいない場合(実測で発生した——WiFi接続直後は
@@ -491,10 +536,16 @@ void setup() {
   pinMode(kLedTimebaseLockPin, OUTPUT);
   pinMode(kLedSpillBacklogPin, OUTPUT);
   pinMode(kLedFastSlowPin, OUTPUT);
+  pinMode(kLedPpsLockPin, OUTPUT);
   digitalWrite(kLedWifiPin, HIGH);  // WiFi接続が確立するまでは「切断中」を表す点灯
   digitalWrite(kLedTimebaseLockPin, LOW);
   digitalWrite(kLedSpillBacklogPin, LOW);
   digitalWrite(kLedFastSlowPin, LOW);
+  digitalWrite(kLedPpsLockPin, LOW);
+
+  // GNSS UART。CFG-TP5/CFG-NAV5はu-centerで一度EEPROMへ焼く前提なので、
+  // firmwareからは読むだけ(→ docs/log/2026-08-12-gnss-pps-wiring-plan.md)。
+  Serial1.begin(kGnssUartBaud, SERIAL_8N1, kGnssUartRxPin, kGnssUartTxPin);
 
   ensureWifi();
   timesync::begin(kNtpServers[0], kNtpServers[1],
@@ -546,6 +597,13 @@ void setup() {
                                        1.0),
       std::memory_order_relaxed);
 
+  // PPS(方式A)。gRecordGoertzelと同じく、i2sTask起動前に構築すること。
+  // 閾値は未校正のプレースホルダ(→ config.hのkPpsEdgeThresholdコメント)。
+  gPpsEdgeQueue = xQueueCreate(16, sizeof(double));
+  gEdgeDetector.store(
+      new ppsedge::PpsEdgeDetector(kPpsEdgeThreshold, kPpsEdgeRefractorySamples),
+      std::memory_order_relaxed);
+
   xTaskCreatePinnedToCore(i2sTask, "i2s_pump", 4096, nullptr, 5, nullptr, 1);
 
   // fw versionは実行中変わらないので一度だけ埋める(Uploaderはポインタを保持する
@@ -585,6 +643,9 @@ void loop() {
     if (i2s.overflows != seenOverflows) {
       Serial.printf("# i2s overflow (total=%u); fs regression reset\n", i2s.overflows);
       gFs.reset();
+      // ドロップしたフレーム分だけgEdgeDetectorのサンプル計数とgFramesの対応が
+      // ズレるため、PPS回帰も測れなかった区間として切り捨てる(gFsと同じ理由)。
+      gPps.reset();
       seenOverflows = i2s.overflows;
     }
 
@@ -621,6 +682,48 @@ void loop() {
     gFsSourceWasNtp = nowNtp;
 
     gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
+  }
+
+  // PPSエッジをgPpsの回帰へ取り込む。NTPクエリ(128秒間隔)とは独立に毎周回す
+  // ——PPSエッジは1秒に1回来るので、NTPのタイミングに縛られると再武装が遅れる。
+  {
+    double edgeTicks;
+    while (gPpsEdgeQueue != nullptr && xQueueReceive(gPpsEdgeQueue, &edgeTicks, 0) == pdTRUE) {
+      gPps.addEdge(edgeTicks);
+    }
+
+    const bool nowPps = gPps.source() == timebase::Source::kPps;
+    digitalWrite(kLedPpsLockPin, nowPps ? HIGH : LOW);
+    if (nowPps && !gPpsSourceWasPps) {
+      // NTPロック時と同じ手順(2段目)。PPSはNTPよりさらに精度が良いので、
+      // NTPで一度武装した後でもPPSロック時にもう一段作り直す価値がある。
+      gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+      const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+      gRecordGoertzel.store(
+          new gridfreq::GoertzelEstimator(gFNominalHz,
+                                           static_cast<double>(gPps.fsMicroHz()) / 1e6, 1.0,
+                                           seedCycles),
+          std::memory_order_relaxed);
+      Serial.printf("# pps locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
+                    "resid_ns=%u\n",
+                    static_cast<double>(gPps.fsMicroHz()) / 1e6,
+                    static_cast<unsigned long long>(seedCycles), gPps.obsCount(),
+                    gPps.residualNs());
+    }
+    gPpsSourceWasPps = nowPps;
+  }
+
+  // GNSS UART。NMEAは1Hz程度でしか届かないので、I2Sのように詰まって溢れる
+  // 規模のデータ量ではない——available()が空になるまで読み切ってよい。
+  while (Serial1.available() > 0) {
+    const char c = static_cast<char>(Serial1.read());
+    if (gNmeaReader.feed(c)) {
+      gnss::GgaFix fix;
+      if (gnss::parseGga(gNmeaReader.line(), gNmeaReader.lineLen(), fix)) {
+        gGnssFix = fix.hasFix();
+      }
+      // GGA以外の行(GSA/RMC等)はparseGgaがfalseを返すだけで無害に無視される。
+    }
   }
 
   WindowRecord rec;
@@ -693,16 +796,22 @@ void loop() {
       hf.device_id = gIdentity.deviceId;
       hf.session_id = gSessionId;
       hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
-      hf.fs_measured_uhz = gFs.fsMicroHz();
-      hf.tb_obs_count = gFs.obsCount();
-      hf.tb_residual_ns = gFs.residualNs();
-      hf.flags = gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0;
-      // **正直にそのバッチ時点のgFs.source()を申告する。** ロック前はNOMINAL、
-      // ロック後はNTP(PPSが無いのでPPSを名乗ることはない)。1バッチはこの粒度
-      // でしか源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で
-      // 代表させる(→ docs/log/2026-08-08-nominal-window-open-question.md)。
-      hf.timebase_source =
-          gFs.source() == timebase::Source::kNtp ? kGfrqTbNtp : kGfrqTbNominal;
+
+      // **正直にそのバッチ時点の源を申告する。** PPSが使えるならfs関連の3値は
+      // PPS優先(NTPより桁で精度が良い)、絶対時刻(batchStartUs)への固定は
+      // 引き続きgFs(NtpTimebase)が担う役割分担のまま変えていない
+      // (→ docs/log/2026-08-12-pps-timebase-impl.md)。1バッチはこの粒度でしか
+      // 源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で代表させる
+      // (→ docs/log/2026-08-08-nominal-window-open-question.md と同じ考え方)。
+      const bool ntpUsable = gFs.source() == timebase::Source::kNtp;
+      const bool ppsUsable = gPps.source() == timebase::Source::kPps;
+      hf.fs_measured_uhz = ppsUsable ? gPps.fsMicroHz() : gFs.fsMicroHz();
+      hf.tb_obs_count = ppsUsable ? gPps.obsCount() : gFs.obsCount();
+      hf.tb_residual_ns = ppsUsable ? gPps.residualNs() : gFs.residualNs();
+      hf.timebase_source = ppsUsable ? (ntpUsable ? kGfrqTbPpsNtp : kGfrqTbPps)
+                                      : (ntpUsable ? kGfrqTbNtp : kGfrqTbNominal);
+      hf.flags = (gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0) |
+                 (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0);
       hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
       gridfreq::fillHeader(*gCurrentBatch, hf);
 

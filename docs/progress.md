@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-12 | **main.cppへのPPS方式A統合を実装し、実機ビルドで確認した(実配線/実測前)。** 前段の設計(下記ログ)をそのまま書き写した。ユーザーの指摘で`.venv`がworktree外のリポジトリトップ(`/Users/nana/codes/Electabuzz/.venv`)にあると判明し、`-d`オプションでこのworktreeの`firmware/`へ向けて実際に`pio run`できることを確認できた——`env:record`(39.6秒、PpsTimebase/PpsEdgeDetector/GnssNmeaともリンク確認)・`s3`・`gridfreqtest`・`ledtest`全てSUCCESS。`provision`のみ失敗したが、原因はこのworktreeに元々無い`secrets.h`(gitignore対象)で今回の変更とは無関係。ホストテスト(Timebase/GridFreq/Goertzel/PpsEdge/GnssNmea)も全て再確認し退行なし。**`kPpsEdgeThreshold`は依然未校正のプレースホルダで、実配線・実測はまだ何もしていない** | [log/2026-08-12-main-integration-impl.md](log/2026-08-12-main-integration-impl.md) |
 | 2026-08-12 | **main.cppへのPPS方式A統合設計をまとめた(未実装)。** `PpsTimebase`/`PpsEdgeDetector`/`GnssNmea`をmain.cppへどう配線するかを具体的なコード断片で設計した——R chはpumpI2s()内でGoertzelと同じループから`PpsEdgeDetector`へfeedし検出エッジをCore1→Core0のキューで橋渡し、PPSロック時はNTPロック時と同じ手順でGoertzelを再武装(2段目)、GNSS UART(Serial1)はCore0のloop()で読みNMEA GGAのfix qualityを`gnss_fix`フラグに反映、DMAオーバーフロー時は`gFs`と同様`gPps`もreset()する。絶対時刻(`batchStartUs`)は引き続き`NtpTimebase`が担う役割分担は変えていない。**閾値(`kPpsEdgeThreshold`)は未校正のプレースホルダのまま、main.cppへの実際の書き写し・コンパイル確認はまだ**(このセッションのサンドボックスにPlatformIOが無い) | [log/2026-08-12-main-integration-design.md](log/2026-08-12-main-integration-design.md) |
 | 2026-08-12 | **GNSS UART読み取り(NMEA GGA解析)を実装した。アンテナ非依存・ホストテストのみ。** `firmware/lib/GnssNmea/`に`NmeaLineReader`(バイト列→行組み立て)と`parseGga`(GGAのfix quality解析、チェックサム検証)を追加。UBX-MON-VER(チップの本物確認)はu-centerでの一度きりの手動確認で足りると判断し、firmwareには実装しないとスコープを絞った——GFRQワイヤ形式が必要とする`gnss_fix`フラグ1ビットはNMEA GGAで足りる。2バイナリ・10ブロック22チェック全緑、既存テストも退行なし。**main.cppへの統合・実機ビルド確認は未着手** | [log/2026-08-12-gnss-nmea-impl.md](log/2026-08-12-gnss-nmea-impl.md) |
 | 2026-08-12 | **`PpsEdgeDetector`(R chのエッジをサブサンプル線形補間で検出する層)を実装した。アンテナ非依存・ホストテストのみ。** `PpsTimebase::addEdge()`が受け取る「ticks」を実際に作る側。閾値の上向き交差を前後2点の直線補間で求める薄い層で、ヒステリシス(同一プラトー内の多重検出防止)と不応期(時間的に近すぎる別クロッシングの排除)の2種類の多重検出防止を持つ。閾値自体は未校正のプレースホルダで、R ch AFEの実配線後に較正する前提。テスト4ブロック6チェック全緑、既存テストも退行なし。**main.cppへの統合・実機ビルド確認は未着手** | [log/2026-08-12-pps-edge-detector-impl.md](log/2026-08-12-pps-edge-detector-impl.md) |
@@ -77,7 +78,7 @@
 | 手持ちハードウェア | **ESP32-S3-WROOM-1 N16R8 の DevKitC-1 系クローン**（本番用。**GPIO 33〜37 は octal PSRAM に取られていて使えない**）、**PCM1808 モジュール**（缶発振器なし版。2026-08-05 到着。**無改造で使える**。配線は [hardware.md](hardware.md)）、**無印 ESP32**（Namazu と同型の余り。予備機・差し替え先）、**GNSS NEO-M8N(1台目、2026-08-12到着)**。**`UBX-MON-VER`での本物確認・実配線はまだ**（配線案は [hardware.md](hardware.md)「GNSS(NEO-M8N) 配線」節、[log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md)） |
 | 未入手 | **アクティブアンテナ（GPS+BD+GLONASS対応品を2本発注済み。→ [log/2026-08-07-antenna-order.md](log/2026-08-07-antenna-order.md)。国内発送まで進んだが未着）**、GNSS 受信機2台目（1台目は到着済み → 上行。**段階1の判定が出てから決める**）、AFEのTVS（**OPアンプ・C1は不要/確定になった**。→ [hardware.md](hardware.md)）。**DMM（HIOKI 3244-60）は入手済み**（2026-08-03〜、実測に使用中。この行は取得漏れの記述ミスだったので訂正） |
 | 稼働中 | フェーズ1.5のsoakは2026-08-07時点で停止済み（水晶soakの一昼夜ぶんの結果は確保済み。→ [log/2026-08-05-soak-first-day.md](log/2026-08-05-soak-first-day.md)）。**代わりに実配線でのfs実測が完了し、リスク10を解消した**（→ [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)） |
-| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp` / **`PpsTimebase`(2026-08-12実装、未統合)**）で、回帰は Arduino 非依存。**R chのエッジ検出は `firmware/lib/PpsEdge/`**（`PpsEdgeDetector`、2026-08-12実装。閾値は未校正・未統合）。**GNSS UART読み取りは `firmware/lib/GnssNmea/`**（`NmeaLineReader`/`parseGga`、2026-08-12実装、未統合）。**位相推定は `firmware/lib/Goertzel/`**（単一ビンDFTの2次IIR再帰。Python参照実装`tools/gridfreq/goertzel.py`のC++移植）。`firmware/src/main.cpp` は3つのビルドモードを持つ: 既定(`env:s3`。soak専用、位相推定も送信もしない)、`NAMZ_GRIDFREQ_TEST`(`env:gridfreqtest`。疎通確認用の生サンプルダンプ)、**`NAMZ_GRIDFREQ_RECORD`(`env:record`。NTPロックも待たず起動直後からGoertzel+GFRQ+`Uploader`を動かす。`timebase_source`はそのバッチ時点の`gFs.source()`を正直に申告し、ロックした瞬間に規正済み`fs`で推定器を作り直す。2026-08-08〜)**。**`env:record`は実機に投入済みで、`fs`ロック後に実際にバッチを送れていることを確認した**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。**NOMINAL即記録化後のfirmwareも2026-08-08に実機書き込み済み**で、起動直後から記録が始まることを起動ログで確認した（→ [log/2026-08-08-nominal-window-deploy.md](log/2026-08-08-nominal-window-deploy.md)。**NOMINAL→NTP遷移を跨いだ実データでの確認はこれから**）。**クラウド側は `lambda/ingest/handler.py` + `lambda/api/handler.py`(`/recent`。NOMINAL区間の事後補正`freq_hz_corrected`を含む) + `lambda/store_gridfreq.py`**（`/alert`・detect・rollupは未実装）。**`dashboard/`(vanilla JS + Canvas)も実データで動作確認済み**（→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)。**NOMINAL/補正線の描画は合成データでのみ確認済みで、実データでの見た目はこれから**）。**`terraform/`はingest+api+dashboard分を書いて`apply`済み**（NOMINAL対応版のapi/ingestも2026-08-08にapply済み）。**`firmware/src/secrets.h`も埋めてある**（gitignore対象なのでworktreeからのコピーが要る）。detect/rollup/watchdogは対応するLambdaが無いのでterraformも未着手 |
+| コード | **`GFRQ` の書き手と読み手が揃った。** `firmware/lib/GridFreq/`（ヘッダの組み立て）と `lambda/wire_gridfreq.py`（パーサ）。契約は `testdata/gfrq_v1_golden.hex` で両側から固定してある。**時間基準は `firmware/lib/Timebase/`**（`TimebaseEstimator` / `NtpTimebase` / `MeasuringSntp` / **`PpsTimebase`(2026-08-12実装)**）で、回帰は Arduino 非依存。**R chのエッジ検出は `firmware/lib/PpsEdge/`**（`PpsEdgeDetector`、2026-08-12実装。閾値は未校正）。**GNSS UART読み取りは `firmware/lib/GnssNmea/`**（`NmeaLineReader`/`parseGga`、2026-08-12実装）。**この3つは`env:record`のmain.cppへ2026-08-12に統合済み**（実機ビルド確認済み・実配線/実測前。→ [log/2026-08-12-main-integration-impl.md](log/2026-08-12-main-integration-impl.md)）。**位相推定は `firmware/lib/Goertzel/`**（単一ビンDFTの2次IIR再帰。Python参照実装`tools/gridfreq/goertzel.py`のC++移植）。`firmware/src/main.cpp` は3つのビルドモードを持つ: 既定(`env:s3`。soak専用、位相推定も送信もしない)、`NAMZ_GRIDFREQ_TEST`(`env:gridfreqtest`。疎通確認用の生サンプルダンプ)、**`NAMZ_GRIDFREQ_RECORD`(`env:record`。NTPロックも待たず起動直後からGoertzel+GFRQ+`Uploader`を動かす。`timebase_source`はそのバッチ時点の`gFs.source()`を正直に申告し、ロックした瞬間に規正済み`fs`で推定器を作り直す。2026-08-08〜)**。**`env:record`は実機に投入済みで、`fs`ロック後に実際にバッチを送れていることを確認した**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。**NOMINAL即記録化後のfirmwareも2026-08-08に実機書き込み済み**で、起動直後から記録が始まることを起動ログで確認した（→ [log/2026-08-08-nominal-window-deploy.md](log/2026-08-08-nominal-window-deploy.md)。**NOMINAL→NTP遷移を跨いだ実データでの確認はこれから**）。**クラウド側は `lambda/ingest/handler.py` + `lambda/api/handler.py`(`/recent`。NOMINAL区間の事後補正`freq_hz_corrected`を含む) + `lambda/store_gridfreq.py`**（`/alert`・detect・rollupは未実装）。**`dashboard/`(vanilla JS + Canvas)も実データで動作確認済み**（→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)。**NOMINAL/補正線の描画は合成データでのみ確認済みで、実データでの見た目はこれから**）。**`terraform/`はingest+api+dashboard分を書いて`apply`済み**（NOMINAL対応版のapi/ingestも2026-08-08にapply済み）。**`firmware/src/secrets.h`も埋めてある**（gitignore対象なのでworktreeからのコピーが要る）。detect/rollup/watchdogは対応するLambdaが無いのでterraformも未着手 |
 | 開発環境 | repo 直下の `.venv`（Namazu と同じ形）に pytest・platformio・**boto3・batch-uplink v1.6.0**。テストは `.venv/bin/python -m pytest lambda/tests` / `firmware/lib/GridFreq/test/run.sh` / `firmware/lib/Timebase/test/run.sh` / `firmware/lib/Goertzel/test/run.sh`。ビルドは `.venv/bin/pio run -d firmware`(`-e s3`/`-e gridfreqtest`/`-e record`)。**`firmware/src/secrets.h` は gitignore 対象**（雛形は `secrets.h.example`。`env:record`を使うには`kDeviceId`/`kIngestUrl`/`kHmacSecret`を埋める） |
 
 ### 着手可能なタスク
@@ -143,15 +144,23 @@
   → [log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)
   → [log/2026-08-08-batch-start-frame-capture-time.md](log/2026-08-08-batch-start-frame-capture-time.md)）
 
-- **GNSS(NEO-M8N)受信機到着、アンテナ未着**（2026-08-12）。アンテナ非依存で進められる
+- ~~**GNSS(NEO-M8N)受信機到着、アンテナ未着**（2026-08-12）。アンテナ非依存で進められる
   範囲(`PpsTimebase`実装・GNSS UART読み取りコード・R ch AFE配線)を洗い出し、配線案を
-  `hardware.md`へ追加した。**まだ何も実装していない**
-  → [log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md)
+  `hardware.md`へ追加した。~~ **`PpsTimebase`・`PpsEdgeDetector`・`GnssNmea`の実装、
+  main.cppへの統合、実機ビルド確認まで完了**（同日中。→
+  [log/2026-08-12-gnss-pps-wiring-plan.md](log/2026-08-12-gnss-pps-wiring-plan.md) →
+  [log/2026-08-12-pps-timebase-impl.md](log/2026-08-12-pps-timebase-impl.md) →
+  [log/2026-08-12-pps-edge-detector-impl.md](log/2026-08-12-pps-edge-detector-impl.md) →
+  [log/2026-08-12-gnss-nmea-impl.md](log/2026-08-12-gnss-nmea-impl.md) →
+  [log/2026-08-12-main-integration-design.md](log/2026-08-12-main-integration-design.md) →
+  [log/2026-08-12-main-integration-impl.md](log/2026-08-12-main-integration-impl.md)）。
+  **残るのは実配線(R ch AFE・GNSS UART)と閾値較正、アンテナ到着後の実測だけ**
 
 ### まだ触っていない領域
 
-**フェーズ2(PPS同時サンプリング)そのもの**（GNSS受信機は到着したがアンテナ未着で、
-実配線・実測はまだ。→ 上記タスク）。時刻偏差(TE)の絶対値・
+**フェーズ2(PPS同時サンプリング)の実配線・実測**（ソフト側の実装・main.cpp統合・
+実機ビルド確認は完了したが、R ch AFEもGNSS UARTもまだ実配線していない。アンテナも未着。
+→ 上記タスク）。時刻偏差(TE)の絶対値・
 欠測区間の可視化はPPS到着後。**`terraform/`はingest+api+dashboard分のみ**——detect/rollup/watchdogに対応する
 Lambdaがまだ無いので、それらのterraformも未着手（→ [log/2026-08-07-terraform-ingest-stack.md](log/2026-08-07-terraform-ingest-stack.md)）。
 **位相推定(Goertzel)のC++移植とGFRQ送信は2026-08-07にフェーズ2を待たずに完了した**
