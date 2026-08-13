@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-14 | **窓ガラス貼り付けは向きを気にしなくてよいと実測で確認した。** u-centerが無くてもGNSSはただのUARTなので読めると気づき、USB-TTLアダプタをMacに直挿しして`screen`/`cat`で生ログを取る運用に切り替えた(Windows+u-center必須ではなくなった)。解析用に`tools/parse_gnss_log.py`を新規追加(NMEA/UBXチェックサム検証込み)。屋外(コンクリート上)・窓ガラスの双方で向きを反転させた計4本のログ(各5〜13分)を比較したところ、**屋外ではアンテナの向きでSNRが有意に変わる(GPS +4.2dB・GLONASS +6.5dB)が、窓ガラス越しではほぼ変わらない(誤差レベル)**と判明——近接する反射面(屋外はコンクリート、窓は室内の開放空間)の有無が効いているという仮説(未検証)を得た。**捕捉衛星数(9〜12機)・HDOP(1.3〜1.7)はどの条件でも安定しており、段階1の判定基準には全く問題無い** | [log/2026-08-14-antenna-orientation-and-window-vs-outdoor.md](log/2026-08-14-antenna-orientation-and-window-vs-outdoor.md) |
 | 2026-08-13 | **アクティブアンテナが到着し、段階1の判定(捕捉衛星数・fix安定性の実測)に着手した。** 窓を開けてケーブルを屋外に出す形でNEO-M8Nに接続し、即座に3D Fix(GPS4+GLONASS4の計8機、PDOP 3.3・HDOP 2.2)を確認。u-centerで09:48〜11:59の約2時間11分を連続記録し(`.ubx`、5.5MB)、GGA解析でfix qualityがほぼ全区間`1`・捕捉衛星数は起動直後3機→収束後平均9.4機(最大12機)・HDOPは収束後1〜2台まで改善、と確認した。**副産物としてUBX-NAV-PVT/NAV-SATの出力レートが未設定だったと判明**(記録された`NAV-PVT`が全区間で8件のみ)。SMAのアンテナ用バイアス電圧も実測し**約3.2V**(u-blox典型値の3.3V付近と一致)を確認、[open-questions.md](open-questions.md)の未検証項目を1つ解消した。**屋内(窓ガラス)設置との比較、数日分のログ積み上げはこれから**——USB-TTLケーブルの延長待ちで一時中断中 | [log/2026-08-13-gnss-antenna-first-outdoor-session.md](log/2026-08-13-gnss-antenna-first-outdoor-session.md) |
 | 2026-08-13 | **電源喪失検知まわりのドキュメント食い違いを直した。** `hardware.md`「電源」節が2026-08-12の結論(検知はv_rmsではなくGoertzelビンエネルギー、断線と停電は区別せず「AC入力が見えない」で一本化)に更新されていなかったので合わせた。相談中に出た「UPSマルチプレクサのSTATピンで断線/停電を自動判別できるのでは」という案は、STAT(母艦の給電経路)とAC入力断検知(トランス→AFEの経路)が物理的に別系統で連動しないため誤りと判明——STATは記録するとしても`timebase_source`と同じ独立した品質ビット止まりとする方針にした。ついでに`v_rms_mv`が空の理由も調べ、**測る能力(`GoertzelEstimator::magnitude()`)は既にあり、ブロッカーは基準点の決定とADCコード→volt換算の配線だけ**と確認した | [log/2026-08-13-power-fail-doc-reconciliation.md](log/2026-08-13-power-fail-doc-reconciliation.md) |
 | 2026-08-12 | **ダッシュボード/APIにカスタムドメイン(`electabuzz.dark-kuins.net`/`api.electabuzz.dark-kuins.net`)を割り当てた。** Namazuの`terraform/custom_domain.tf`を流用し、ACM証明書(us-east-1)発行→DNS(`nna774/dark-kuins.net-dns`、外部リポジトリ)へ検証レコード・本番CNAMEをPRで追加([#1](https://github.com/nna774/dark-kuins.net-dns/pull/1))→`terraform apply`で両CloudFrontへ`alias`付与→`dashboard/config.js`を新API URLへ差し替えて再デプロイ、まで通した。実際に両ドメインでHTTP 200・`/recent`が実データを返すことを確認済み。**以降、CloudFront既定ドメインを覚える必要は無い** | [log/2026-08-12-dashboard-api-custom-domain.md](log/2026-08-12-dashboard-api-custom-domain.md) |
@@ -107,10 +108,14 @@
   → [log/2026-08-07-fs-wiring-verification.md](log/2026-08-07-fs-wiring-verification.md)
 - ~~**アクティブアンテナを買う**~~ **到着済み**（2026-08-07発注・2026-08-13到着。GPS+BD+GLONASS
   対応品を2本、836円/本。→ [log/2026-08-07-antenna-order.md](log/2026-08-07-antenna-order.md)）
-- **段階1の判定（捕捉衛星数・fix安定性のログ取り）** 着手済み。屋外(窓越し)で3D Fix・
+- **段階1の判定（捕捉衛星数・fix安定性のログ取り）** 進行中。屋外(窓越し)で3D Fix・
   約2時間11分の連続ログ(numSV平均9.4機、HDOP収束後1〜2台)・SMAバイアス電圧(約3.2V)を
-  確認した。**残り: 屋内(窓ガラス貼り付け)設置との比較、数日分のログ積み上げ**
-  （USB-TTLケーブルの延長待ちで一時中断中）→ [log/2026-08-13-gnss-antenna-first-outdoor-session.md](log/2026-08-13-gnss-antenna-first-outdoor-session.md)
+  確認した後、**u-center無しでMac直結+`tools/parse_gnss_log.py`で解析する運用に
+  切り替え**、屋外/窓ガラス×2向きの計4パターンを比較して**窓ガラス貼り付けは向きを
+  気にしなくてよい・捕捉衛星数とHDOPはどの条件でも安定していると確認した**。
+  → [log/2026-08-13-gnss-antenna-first-outdoor-session.md](log/2026-08-13-gnss-antenna-first-outdoor-session.md)、
+  [log/2026-08-14-antenna-orientation-and-window-vs-outdoor.md](log/2026-08-14-antenna-orientation-and-window-vs-outdoor.md)。
+  **残り: 数日分のログ積み上げ**
 - ~~**Goertzelをfirmwareへ移植し、GFRQを実際に送る**~~ **済み**（2026-08-07。
   `firmware/lib/Goertzel/` + `env:record`。`timebase_source=NTP`で送信するところまで
   実装したが**実機投入はまだ**。→ [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)）
