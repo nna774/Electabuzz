@@ -6,11 +6,16 @@
 fix安定性の実測、→ docs/gnss.md)で、屋外/屋内(窓ガラス貼り付け)の比較に使う。
 
 対象にするメッセージ:
-    - NMEA $..GGA  : fix品質・捕捉衛星数(numSV)・HDOP・高度
+    - NMEA $..GGA  : fix品質・捕捉衛星数(numSV)・HDOP・高度(UTC時刻のみ、日付は無い)
+    - NMEA $..RMC  : UTC日付(ddmmyy)。GGAの時刻に日付を紐づけるために使う
     - NMEA $..GSV  : 衛星ごとのCN0(SNR)。talkerで衛星系を区別する
       (GP=GPS, GL=GLONASS, GA=Galileo, GB=BeiDou, GQ=QZSS)
     - UBX NAV-PVT (class 0x01 id 0x07) : fixType・numSV(出力されていれば)
 それ以外のUBXメッセージは種別ごとの件数だけ数える。
+
+**GGA単体にはUTC日付が無い**ので、日をまたぐ(深夜0時UTC越え)長時間ログでは
+時刻だけでは前後関係が決まらない。直近に見たRMCのUTC日付をGGAへ紐づけて
+`datetime`化することで、日またぎでも経過時間を正しく計算する。
 
 `screen`や`cat`での録画は、録り始め・録り終わりが必ずしもメッセージの区切りと
 一致しない(先頭が受信済みバイト列の途中から始まる・Ctrl-Cで末尾が切れる)。
@@ -24,9 +29,34 @@ NMEAはチェックサム(`*hh`)、UBXはFletcher-8チェックサムをそれ�
 from __future__ import annotations
 
 import argparse
+import datetime
 import struct
 import sys
 from collections import Counter, defaultdict
+
+
+def parse_nmea_time(hhmmss: str) -> tuple[int, int, int, int] | None:
+    # "hhmmss.ss" (小数部は無いこともある)
+    if len(hhmmss) < 6:
+        return None
+    try:
+        h, m, s = int(hhmmss[0:2]), int(hhmmss[2:4]), int(hhmmss[4:6])
+        frac = hhmmss[6:]
+        micro = int(round(float("0" + frac) * 1_000_000)) if frac else 0
+        return h, m, s, micro
+    except ValueError:
+        return None
+
+
+def parse_rmc_date(fields: list[str]) -> datetime.date | None:
+    # $..RMC,hhmmss.ss,status,lat,NS,lon,EW,sog,cog,ddmmyy,magvar,magvarEW,mode*cs
+    if len(fields) < 10 or len(fields[9]) != 6:
+        return None
+    try:
+        dd, mm, yy = int(fields[9][0:2]), int(fields[9][2:4]), int(fields[9][4:6])
+        return datetime.date(2000 + yy, mm, dd)
+    except ValueError:
+        return None
 
 
 def nmea_checksum_ok(line: str) -> bool:
@@ -119,6 +149,7 @@ def summarize(data: bytes) -> None:
     gga_rows: list[dict] = []
     gsv_snr: dict[str, list[int]] = defaultdict(list)
     bad_nmea = 0
+    current_date: datetime.date | None = None
     for raw_line in data.split(b"\r\n"):
         try:
             line = raw_line.decode("ascii")
@@ -134,9 +165,22 @@ def summarize(data: bytes) -> None:
             continue
         fields = line.split(",")
         sentence = fields[0][1:]
-        if sentence.endswith("GGA"):
+        if sentence.endswith("RMC"):
+            d = parse_rmc_date(fields)
+            if d is not None:
+                current_date = d
+        elif sentence.endswith("GGA"):
             row = parse_gga(fields)
             if row:
+                t = parse_nmea_time(row["time"])
+                if t is not None and current_date is not None:
+                    h, m, s, micro = t
+                    row["dt"] = datetime.datetime(
+                        current_date.year, current_date.month, current_date.day,
+                        h, m, s, micro, tzinfo=datetime.timezone.utc,
+                    )
+                else:
+                    row["dt"] = None
                 gga_rows.append(row)
         elif sentence.endswith("GSV"):
             for talker, snr in parse_gsv(fields):
@@ -144,8 +188,18 @@ def summarize(data: bytes) -> None:
 
     print(f"\nGGA sentences: {len(gga_rows)}")
     if gga_rows:
-        print(f"  first: {gga_rows[0]}")
-        print(f"  last:  {gga_rows[-1]}")
+
+        def fmt_row(r: dict) -> str:
+            t = r["dt"].isoformat() if r["dt"] is not None else f"time={r['time']} (date不明)"
+            return f"{t} quality={r['quality']} numSV={r['num_sv']} hdop={r['hdop']} alt_m={r['alt_m']}"
+
+        print(f"  first: {fmt_row(gga_rows[0])}")
+        print(f"  last:  {fmt_row(gga_rows[-1])}")
+        first_dt, last_dt = gga_rows[0]["dt"], gga_rows[-1]["dt"]
+        if first_dt is not None and last_dt is not None:
+            print(f"  span: {last_dt - first_dt}")
+        else:
+            print("  span: unknown (先頭でRMCがまだ来ておらず日付が付けられなかった)")
         quality = Counter(r["quality"] for r in gga_rows)
         print(f"  quality distribution (0=no fix, 1=GPS fix, 2=DGPS): {dict(quality)}")
         num_svs = [r["num_sv"] for r in gga_rows if r["num_sv"] is not None]
