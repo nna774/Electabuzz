@@ -20,14 +20,25 @@
 | **稼働時間(uptime)ヘッダ→再起動検知** | **uptimeの送信自体はOTA実装(2026-08-09、→ [ota.md](ota.md))で片付いた**——`X-Elbz-Uptime-Us`ヘッダで`esp_timer_get_time()`の生値を毎バッチ送っており、ingestはCloudWatchログに出している。**残っているのは`boot_epoch_us = batch_start_us - uptime_us`を計算して再起動を検知するロジックだけ**——今はログに出すだけで、再起動の自動検知・通知は無い。生存台帳が無いので現状は保存先も無い(watchdog Lambda着手時にセットで検討) |
 | **heapテレメトリ(free heap / max alloc block)** | **free heapの送信はOTA実装(→ [ota.md](ota.md))で片付いた**(`X-Elbz-Heap-Free`ヘッダ、CloudWatchログに出すだけ)。**max alloc block(断片化の兆候)は未実装のまま**——Namazu側はバックフィル中の長時間クラッシュ調査という具体的な動機から追加したもので、Electabuzzはまだ同種の障害を経験していないので、経験してから着手で足りる |
 | **AC入力線の入力断検知・物理固定** | 2026-08-12、実機でAC入力線がブレッドボードから抜ける事故が発生(→ [risks.md](risks.md)リスク13、[log/2026-08-12-afe-input-disconnect-detection.md](log/2026-08-12-afe-input-disconnect-detection.md))。回路解析で「node AがR2経由でGNDへ落ちて振幅ゼロに静止する素直な壊れ方」と判明したので、**Goertzelビンのエネルギーがしきい値未満で継続することを条件にした検知が実装候補**——`flags`の空きビット割り当てが要る(下の「設計を進めると決まること」参照)。**物理対策(半田固定・端子台・ホットボンド等でブレッドボード依存を下げる)は検知と独立に着手できる**が、どちらも未着手。**通知(検知したら知らせる)まで含めてやりたいという要望が出た。ただしAFE単体の信号では「線が抜けた」と「停電した」が原理的に区別できない**——UPS化(→[log/2026-08-11-usb-ups-power-mux-design.md](log/2026-08-11-usb-ups-power-mux-design.md))前は停電なら装置ごと止まるので通知自体を送れず問題にならないが、UPS化後はESP32が電池で生き続けAFEだけが入力ゼロを見る状態になり、両者は見分けがつかなくなる。**方針: 無理に区別しない。「AC入力が見えない」でひとつの通知にし、原因の切り分けは人間が現地を見て判断する**（追加の手掛かり――例えば別系統でコンセントの生死を見る――を足さない限り自動判別はできないので、要求が具体化するまで作り分けない）。通知先(Slack/メール等)とdetect側(フェーズ9、まだ何も無い)の設計はこれから。**関連: [log/2026-08-11-usb-ups-power-mux-design.md](log/2026-08-11-usb-ups-power-mux-design.md)のSTATピン案は「今どちらの電源で動いているか」を示す独立ビットであって、この項の自動判別を解決する追加の手掛かりにはならない**——STATは母艦(ESP32)自身の給電経路、AC入力断検知はトランス→AFEの経路と、物理的に別系統だから連動しない（例: USB配線整理でUSBだけ一時的に抜けてもトランス側は生きたままでAFE振幅は正常）。記録するなら`timebase_source`と同じ独立した品質ビット止まりとする(→ [hardware.md](hardware.md)「電源」節) |
+| **トランス巻数比の精密測定** | `hardware.md`「電源」節に置いた壁側換算比≈9.71倍は、2026-08-03の現物検証ログ(100V系コンセントで駆動・無負荷、DMM実測10.3VAC)からの第一近似で、**壁側電圧をその場で精密に同時測定してはいない**(日本のコンセントは実際には101〜107V程度でばらつく)。`v_rms_mv`自体(二次側基準、→[wire-format.md](wire-format.md))の記録・検知には影響しないので急がない。壁側電圧をダッシュボード等で実際に表示したくなった時に、DMM2台(またはDMM+オシロ)で壁・二次側を同時に当てて確定させれば足りる |
 | **緊急再起動ボタン(物理ボタン長押し)** | 母艦(ESP32-S3-WROOM-1 N16R8のDevKitC系ボード)のBOOTボタンは**GPIO0**、押下・離しの両方を`digitalRead(0)`で正しく検出できることを実機で確認済み(2026-08-09、→ [log/2026-08-09-led-button-hardware-probe.md](log/2026-08-09-led-button-hardware-probe.md))。RST/ENはハードウェアリセット直結でソフトウェアからは検出できず、Namazuの「退避してから安全に再起動」パターンには使えない(この判断は変わらず)。**技術的な障壁は解消した。着手するかどうかは優先度次第**——GNSS到着待ちの間の手空き作業候補ではあるが、フェーズ2(PPS)に比べれば優先度は低い。**実装するなら参考実装がある**——Namazu(`../NamazuHaUrokoGaNai`)の`kPinButtonFlip`は**Electabuzzと同じGPIO0**（向こうもBOOTボタンの流用）で、`firmware/src/main.cpp`の約590〜690行目に press-edge検出・2段階閾値(`config.h`の`kRebootHoldConfirmMs=2000`で確認画面+キュー先回り退避、`kRebootHoldTriggerMs=5000`で実際に再起動、trigger前に離せば即キャンセル)の実装がある。Electabuzzには表示デバイスが無いのでUI部分(`renderRebootHold`等)は不要、退避+再起動のシーケンスだけ移植すればよい |
 
 ## 設計を進めると決まること
 
 | 対象 | 決めること |
 |---|---|
-| **`v_rms_mv` の基準点** | **商用の 100V は mV では u16 に収まらない**（最大 65.535V）。トランス二次側の実効値[mV]なら 10.5V ≒ `10500` で収まる。二次側の値を持つか、壁側に換算して単位を変える（10mV 刻み等）か。**AFE 分圧抵抗は R1=100kΩ/R2=6.8kΩ に確定済み**（→ [hardware.md](hardware.md)）。レコードを1バイトも記録していない今なら変更が無料で、記録開始後は高くつく。→ [wire-format.md](wire-format.md)。**測る能力自体は既にある**——`GoertzelEstimator::magnitude()`(`firmware/lib/Goertzel/src/Goertzel.h:55`)が窓ごとのビン振幅を計算済みで、現状は50/60Hz判別にしか使っていない(`firmware/src/main.cpp:533`)。ブロッカーは新規計測ではなく、この基準点の決定と、ADCコード→volt換算(分圧比逆算・peak→RMS)をfirmwareへ配線することだけ。それまでは`main.cpp:688`で`vRmsMv=0`固定 |
 | **レコードの `flags`** | ビットを1つも割り当てていない。**何を品質として立てるかは位相推定の実装が決める**ので、それが在るまで決めない（今決めるのは「存在しない要件への一般化」）。フィールドは確保済み。**2026-08-12、候補が1つ具体化した**——AC入力線の断線検知(Goertzelビンのエネルギーがしきい値未満で継続)を表すビット。→ [wire-format.md](wire-format.md)、[risks.md](risks.md)リスク13 |
+
+**`v_rms_mv` の基準点**は片付いた(2026-08-13)。**トランス二次側の実効値[mV]に決定**——
+壁側(商用100V系)への換算は持たない。用途(電圧異常・停電判定)は相対的な落ち込みが
+見えれば足り、分圧比(固定の設計値)だけで完結させ、個体差のあるトランス巻数比という
+校正定数をワイヤフォーマットに持ち込まずに済む。壁側電圧が要る場面が来たら、
+巻数比の定数(→ [hardware.md](hardware.md)「電源」節、暫定値≈9.71倍・未校正)を使って
+downstream側で計算する。**測る能力自体は元々あった**——`GoertzelEstimator::magnitude()`
+(`firmware/lib/Goertzel/src/Goertzel.h:55`)が窓ごとのビン振幅を計算済みで、現状は
+50/60Hz判別にしか使っていない(`firmware/src/main.cpp:533`)。**firmwareへの配線
+(ADCコード→volt換算、`main.cpp:688`の`vRmsMv=0`固定を実値へ)は未着手のまま**。
+→ [wire-format.md](wire-format.md)、[log/2026-08-13-vrms-basis-point-decision.md](log/2026-08-13-vrms-basis-point-decision.md)
 
 **バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-09)。**NOMINAL区間**は固定アンカー+公称fsの線形外挿(境界dt=1.0000秒 stdev=0、実機確認済み)。**NTPロック済み区間**は「`unixUsAt()`の統一で解消」という以前の評価が観測数の多い成熟した回帰でしか検証できておらず不十分だったと判明(→ powerk95外部照合と並行セッションによる独立な再検証(261境界の全数走査)で16件・最大244.5mHzの残存異常を発見)。決定打はAPI側で、`lambda/api/handler.py`の周波数計算をジッタを含む実測dtから`record_rate_mhz`由来の理論値に切り替え、実データ・外部照合の両方で異常が事実上解消することを確認した(firmware側の回帰原点ロールフォワードも実装したが、A/Bテストで効果は約30%縮小に留まる緩和策)。→ [risks.md](risks.md)リスク12、[log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)(NOMINAL側)、[log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)(NTP側、原因特定)、[log/2026-08-09-batch-boundary-jump-ntp-fix.md](log/2026-08-09-batch-boundary-jump-ntp-fix.md)(NTP側、対策)
 
