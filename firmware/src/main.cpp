@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 
 #include "DeviceIdentity.h"
 #include "Goertzel.h"
@@ -94,6 +95,7 @@ struct WindowRecord {
   // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md の再発版）。
   uint64_t framesAtEnd;
   bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
+  uint16_t vRmsMv;      // トランス二次側の実効値[mV]（→ computeVRmsMv()）
 };
 QueueHandle_t gWindowQueue = nullptr;
 bool gPendingDiscontinuity = false;  // gI2sMux で保護する
@@ -118,6 +120,30 @@ const char* u64str(uint64_t v, char* buf, size_t n) {
   while (i > 0 && j + 1 < n) buf[j++] = tmp[--i];
   buf[j] = '\0';
   return buf;
+}
+
+// GoertzelEstimator::magnitude() の窓振幅から `v_rms_mv`(トランス二次側の
+// 実効値[mV])を逆算する。**呼ぶのは `addSample()` が true を返した直後だけ**
+// ——magnitude() は次の窓が確定すると上書きされる。
+//
+// 経路: ADCコード振幅 → PCM1808入力(node A)の電圧振幅 → AFE分圧を戻して
+// トランス二次側の電圧振幅 → 実効値[mV]。基準点の決定は
+// docs/log/2026-08-13-vrms-basis-point-decision.md、定数の根拠は
+// config.h の該当節（docs/hardware.md 由来）。
+uint16_t computeVRmsMv(double magnitude, size_t windowSamples) {
+  if (windowSamples == 0) return 0;
+  // 単一ビンDFTの振幅は正弦波1本なら概ね A*N/2 になる
+  // (firmware/lib/Goertzel/test/test_goertzel.cpp で検証済み)。
+  const double ampCode = 2.0 * magnitude / static_cast<double>(windowSamples);
+  // フルスケール(コード = 2^23)が 0.3×VCC[V]（データシートの 0.6×VCC Vpp の半分）
+  // に対応する。
+  const double nodeAPeakVolts = (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts);
+  // AFE分圧(ADC入力インピーダンスの負荷込み)を逆算してトランス二次側へ戻す。
+  const double secondaryPeakVolts = nodeAPeakVolts / kAfeDividerRatio;
+  const double secondaryRmsMv = (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0;
+  if (secondaryRmsMv <= 0.0) return 0;
+  if (secondaryRmsMv >= 65535.0) return 65535;
+  return static_cast<uint16_t>(secondaryRmsMv + 0.5);
 }
 
 bool startI2s() {
@@ -206,6 +232,7 @@ void pumpI2s() {
       if (g != nullptr && g->addSample(l)) {
         WindowRecord rec{};
         rec.cyclesQ16 = g->cyclesQ16();
+        rec.vRmsMv = computeVRmsMv(g->magnitude(), g->windowSamples());
         // **窓が完成した「その瞬間」のフレーム数。** Core0 がこのレコードを
         // xQueueReceive するまでの遅延（NTP問い合わせ等）に一切依存しない。
         rec.framesAtEnd = framesBeforeThisRead + i + 1;
@@ -685,7 +712,7 @@ void loop() {
               : timesync::nowUs();
       gCurrentBatch->begin(batchStartUs);
     }
-    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
+    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, rec.vRmsMv, /*flags=*/0);
     if (rec.discontinuity) gBatchDiscontinuity = true;
 
     if (gCurrentBatch->isFull()) {
