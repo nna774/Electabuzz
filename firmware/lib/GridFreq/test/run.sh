@@ -12,7 +12,7 @@
 set -euo pipefail
 
 # docs/batch-uplink.md の不変条件どおりタグで pin する。ブランチ追従にするな。
-BATCH_UPLINK_TAG=v1.6.0
+BATCH_UPLINK_TAG=v2.12.0
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIRMWARE="$(cd "$HERE/../../.." && pwd)"

@@ -138,3 +138,28 @@ static constexpr uint32_t kGnssUartBaud = 9600;  // u-bloxの既定ボーレー�
 static constexpr double kPpsEdgeThreshold = 100000.0;  // TODO: 実測後に決める
 // PPSは1Hzなので、その半分の秒数ぶんを不応期に取る(→ PpsEdgeDetector.h)。
 static constexpr uint64_t kPpsEdgeRefractorySamples = kFsNominalHz / 2;
+
+// --- AFE: ADCコード → v_rms_mv(トランス二次側の実効値) 換算 (2026-08-14) ---
+//
+// `v_rms_mv`の基準点はトランス二次側[mV]と決定済み(→ docs/wire-format.md,
+// docs/log/2026-08-13-vrms-basis-point-decision.md)。**壁側への換算はここに
+// 持たない**——巻数比は個体差があり未校正なので、ワイヤフォーマットには
+// 分圧比だけで完結する量を乗せる(壁側が要る場面はdownstream側の仕事)。
+//
+// ここの定数は`fs`と違って実測で追い続けている量ではなく、固定の回路設計値
+// (R1/R2)とデータシート値・実測1点(VCC)から逆算するだけの**近似**。
+// 用途(電圧異常・停電判定の閾値判定)には十分だが、絶対確度を主張しない。
+static constexpr double kAfeR1Ohms = 100000.0;                    // docs/hardware.md
+static constexpr double kAfeR2Ohms = 6800.0;                      // docs/hardware.md
+static constexpr double kAdcInputImpedanceOhms = 60000.0;         // PCM1808 datasheet typ.
+// R2とADC入力インピーダンス(ADCが分圧網を負荷する分)の並列合成。
+static constexpr double kAfeR2EffOhms =
+    (kAfeR2Ohms * kAdcInputImpedanceOhms) / (kAfeR2Ohms + kAdcInputImpedanceOhms);
+// 実効分圧比 k = R2eff/(R1+R2eff) ≒ 0.0576(docs/hardware.md記載の値と一致)。
+static constexpr double kAfeDividerRatio = kAfeR2EffOhms / (kAfeR1Ohms + kAfeR2EffOhms);
+// DevKitの5Vピン実測値(2026-08-05、テスタ。→ docs/hardware.md)。
+// フルスケールが0.6×VCCで決まるため、電源の取りかたを変えたらここも直すこと。
+static constexpr double kAdcVccVolts = 4.84;
+// PCM1808は24bit符号付き。i2s_readは32bit枠にMSB詰めで来るのを>>8で戻すので
+// フルスケール振幅は2^23(main.cppのpumpI2s()参照)。
+static constexpr double kAdcFullScaleCode = 8388608.0;  // 2^23

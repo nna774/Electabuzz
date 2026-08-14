@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 
 #include "DeviceIdentity.h"
 #include "Goertzel.h"
@@ -110,6 +111,7 @@ struct WindowRecord {
   // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md の再発版）。
   uint64_t framesAtEnd;
   bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
+  uint16_t vRmsMv;      // トランス二次側の実効値[mV]（→ computeVRmsMv()）
 };
 QueueHandle_t gWindowQueue = nullptr;
 bool gPendingDiscontinuity = false;  // gI2sMux で保護する
@@ -134,6 +136,30 @@ const char* u64str(uint64_t v, char* buf, size_t n) {
   while (i > 0 && j + 1 < n) buf[j++] = tmp[--i];
   buf[j] = '\0';
   return buf;
+}
+
+// GoertzelEstimator::magnitude() の窓振幅から `v_rms_mv`(トランス二次側の
+// 実効値[mV])を逆算する。**呼ぶのは `addSample()` が true を返した直後だけ**
+// ——magnitude() は次の窓が確定すると上書きされる。
+//
+// 経路: ADCコード振幅 → PCM1808入力(node A)の電圧振幅 → AFE分圧を戻して
+// トランス二次側の電圧振幅 → 実効値[mV]。基準点の決定は
+// docs/log/2026-08-13-vrms-basis-point-decision.md、定数の根拠は
+// config.h の該当節（docs/hardware.md 由来）。
+uint16_t computeVRmsMv(double magnitude, size_t windowSamples) {
+  if (windowSamples == 0) return 0;
+  // 単一ビンDFTの振幅は正弦波1本なら概ね A*N/2 になる
+  // (firmware/lib/Goertzel/test/test_goertzel.cpp で検証済み)。
+  const double ampCode = 2.0 * magnitude / static_cast<double>(windowSamples);
+  // フルスケール(コード = 2^23)が 0.3×VCC[V]（データシートの 0.6×VCC Vpp の半分）
+  // に対応する。
+  const double nodeAPeakVolts = (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts);
+  // AFE分圧(ADC入力インピーダンスの負荷込み)を逆算してトランス二次側へ戻す。
+  const double secondaryPeakVolts = nodeAPeakVolts / kAfeDividerRatio;
+  const double secondaryRmsMv = (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0;
+  if (secondaryRmsMv <= 0.0) return 0;
+  if (secondaryRmsMv >= 65535.0) return 65535;
+  return static_cast<uint16_t>(secondaryRmsMv + 0.5);
 }
 
 bool startI2s() {
@@ -235,6 +261,7 @@ void pumpI2s() {
       if (g != nullptr && g->addSample(l)) {
         WindowRecord rec{};
         rec.cyclesQ16 = g->cyclesQ16();
+        rec.vRmsMv = computeVRmsMv(g->magnitude(), g->windowSamples());
         // **窓が完成した「その瞬間」のフレーム数。** Core0 がこのレコードを
         // xQueueReceive するまでの遅延（NTP問い合わせ等）に一切依存しない。
         rec.framesAtEnd = framesBeforeThisRead + i + 1;
@@ -437,7 +464,8 @@ uint64_t gNominalAnchorFrames = 0;  // アンカー取得時点のrec.framesAtEn
 // Uploaderは「指定したヘッダの値を読んで返す」だけの汎用API(v1.6.0)で、
 // 意味づけはここが持つ。
 constexpr const char* kOtaVersionHeader = "X-Elbz-Ota-Version";
-constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
+// batch-uplink v2.0.0でnullptr終端方式になった(末尾にnullptrを置く。本数引数は無い)。
+constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader, nullptr};
 
 // リクエスト側に乗せて送るヘッダ。今のビルド版数・空きヒープ・起動からの経過を
 // 毎バッチingestへ渡す——GFRQのワイヤ形式(testdata/gfrq_v1_golden.hexで固定された
@@ -446,7 +474,9 @@ constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
 constexpr const char* kFwVersionHeader = "X-Elbz-Fw-Version";
 constexpr const char* kHeapFreeHeader = "X-Elbz-Heap-Free";
 constexpr const char* kUptimeHeader = "X-Elbz-Uptime-Us";
-constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader};
+// namesはnullptr終端(v2.0.0)。valuesは同じ本数分で終端不要。
+constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader,
+                                                  nullptr};
 char sFwVersionBuf[32];  // setup()で一度だけ埋める(ビルド中に変わらない)
 char sHeapFreeBuf[16];   // loop()が送信直前に毎周更新する
 char sUptimeBuf[24];
@@ -610,10 +640,20 @@ void setup() {
   // だけで値をコピーしない。ヒープ/uptimeはloop()側で毎周更新する)。
   snprintf(sFwVersionBuf, sizeof(sFwVersionBuf), "%s", ELBZ_FW_VERSION);
 
-  gUploader = new Uploader(gIdentity.ingestUrl.c_str(), /*alertUrl=*/"",
-                            gIdentity.hmacSecret.c_str(), gIdentity.deviceId, kMaxRamBatches,
-                            kSpillDir, /*dropOldestWhenFull=*/true, kOtaWatchedHeaders,
-                            1, kTelemetryHeaderNames, kTelemetryHeaderValues, 3);
+  // caCert: OTA取得(performPullOta)と同じAmazon Root CA 1を渡し、ingest送信も
+  // setInsecure()からTLS検証ありへ卒業する(batch-uplink v1.8.0)。
+  // discardSpillOn400: 電源断でLittleFSの退避ファイルが0バイト/途中で切れた場合、
+  // wire_gridfreq.parse()は「too short for header」のWireFormatErrorを投げ、
+  // ingestのhandler()はCrcMismatch以外のWireFormatErrorを汎用exceptで拾って
+  // 400を返す(lambda/ingest/handler.py)。この機体は測定対象の電源そのものに
+  // 給電されており、退避ファイル破損の起きやすさはNamazuより高いまである
+  // (→ NamazuHaUrokoGaNai docs/log/2026-08-11-spill-quarantine-on-400.md)。
+  gUploader = new Uploader(
+      gIdentity.ingestUrl.c_str(), /*alertUrl=*/"", gIdentity.hmacSecret.c_str(),
+      gIdentity.deviceId, kMaxRamBatches, kSpillDir, /*dropOldestWhenFull=*/true,
+      kOtaWatchedHeaders, kTelemetryHeaderNames, kTelemetryHeaderValues,
+      reinterpret_cast<const char*>(amazon_root_ca1_pem_start), /*maxSpillReadBytes=*/0,
+      /*discardSpillOn400=*/true);
   gUploader->begin();
 
   Serial.println("# recording started immediately (timebase_source=NOMINAL); "
@@ -788,7 +828,7 @@ void loop() {
               : timesync::nowUs();
       gCurrentBatch->begin(batchStartUs);
     }
-    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
+    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, rec.vRmsMv, /*flags=*/0);
     if (rec.discontinuity) gBatchDiscontinuity = true;
 
     if (gCurrentBatch->isFull()) {

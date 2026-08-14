@@ -1,23 +1,35 @@
 # batch-uplink: 共通ライブラリの切り出し
 
-> **状態（2026-08-07）**: **切り出しは完了し、以後 Namazu 側で6回タグを切っている。**
+> **状態（2026-08-11）**: **切り出しは完了し、以後 Namazu 側で18回タグを切っている。**
 > [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれた
-> のが最初で、**現在の pin は `v1.6.0`。Namazu も Electabuzz も同じタグを指す**のは変わらない。
-> `v1.1.0`〜`v1.6.0` はいずれも Namazu が OTA・リモート再起動・生存台帳表示のために追加した
-> もので、**全て `Uploader` の新規オプトイン引数(既定値で従来どおり)か新規メソッド**であり、
-> 呼び出し側を変えない限り Electabuzz の挙動は変わらない
-> （実例: `dropOldestWhenFull` は 2026-08-07 に Electabuzz が初めて使った引数だが、
-> 追加自体は Namazu が v1.1.0 で先に済ませていた）。**だから Electabuzz は都度 pin を
-> 上げてよく、Namazu の破壊的変更を待つ理由が無い。**
+> のが最初で、**現在の pin は `v2.12.0`。Namazu も Electabuzz も同じタグを指す**のは変わらない。
+> `v1.1.0`〜`v2.12.0` はいずれも Namazu が OTA・リモート再起動・生存台帳表示・実機で踏んだ
+> 障害(WDTパニックでの取りこぼし、ヒープ断片化)の対策のために追加したもので、
+> `v1.x` は全て `Uploader` の新規オプトイン引数(既定値で従来どおり)か新規メソッドだった。
+> `v2.0.0` だけは例外で、ヘッダ配列を固定長+本数引数からnullptr終端方式へ変える
+> **破壊的変更**が入っている(4本上限の撤廃と引き換え)。呼び出し側の書き換えが要るが、
+> ロジックは変わらない機械的な変更で済む。
+> **`v1.6.0`→`v2.12.0`への追従（2026-08-11）で、Electabuzzも次を取り込んだ**:
+> `v2.3.0`のTLSハンドシェイクタイムアウト短縮（既定120秒はtask watchdogより長く、
+> ネット瞬断でハンドシェイクが詰まるとWDTパニックで`flushToSpill()`を経由せず
+> RAM上のバッチを失う——Namazu実機の事故が動機。Electabuzzは`Uploader::pump()`を
+> 専用taskではなく`loop()`から直接呼んでいるため同じ壊れ方をしうる）、
+> `v1.8.0`のCA証明書ピン留め（OTA用に埋め込み済みのAmazon Root CA1を`caCert`引数で
+> 流用し`setInsecure()`を卒業）、`discardSpillOn400`（電源断で0バイト/途中で切れた
+> 退避ファイルを隔離——測定対象の電源そのものに給電されている機体なので実益がある。
+> `lambda/ingest/handler.py`は該当ケースを`CrcMismatch`以外の`WireFormatError`として
+> 既に400で返しており、ingest側の変更は不要だった）。詳細は
+> [log/2026-08-11-batch-uplink-v2.12.0-bump.md](log/2026-08-11-batch-uplink-v2.12.0-bump.md)。
+> **焼き直し(実機投入)はまだ**——ホストテスト・`pio run`のビルド確認のみ済み。
 > 最初の切り出しの経緯は [log/2026-08-03-batch-uplink-v1.0.0.md](log/2026-08-03-batch-uplink-v1.0.0.md)、
 > Electabuzz が pin を v1.6.0 へ上げた経緯は
 > [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)。
 
 ```ini
-lib_deps = https://github.com/nna774/batch-uplink.git#v1.6.0
+lib_deps = https://github.com/nna774/batch-uplink.git#v2.12.0
 ```
 ```bash
-pip install "git+https://github.com/nna774/batch-uplink@v1.6.0"
+pip install "git+https://github.com/nna774/batch-uplink@v2.12.0"
 ```
 
 ## 実コードの調査結果: 流用境界
@@ -35,7 +47,7 @@ pip install "git+https://github.com/nna774/batch-uplink@v1.6.0"
 | [lambda/common/notify.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/notify.py) | `Notifier` 抽象と Slack 実装。通知先は全て env 駆動。**`events.py` は切り出さない**(下記) |
 
 **Electabuzzでもspool/retry機構は無改造でそのまま効いている**（`firmware/platformio.ini`で
-`batch-uplink.git#v1.6.0`をpinし、`firmware/src/main.cpp`で`Uploader`を生成・`enqueue()`/
+`batch-uplink.git#v2.12.0`をpinし、`firmware/src/main.cpp`で`Uploader`を生成・`enqueue()`/
 `pump()`を呼ぶだけ。独自実装は無い）。**保持できる期間はNamazuより長い**（概算、実機未検証）。
 `firmware/platformio.ini`は`board_build.partitions = default_16MB.csv`（Arduino既定の
 16MB分割）を使っており、spiffs領域は`0x360000`＝約3.375MB。GFRQは64Bヘッダ+12B×30レコード
@@ -346,8 +358,9 @@ submodule の SHA は版として読めない。
 **壊さない**ための手段にすぎない。焼き直して確認できるなら触ってよい。
 
 **切り出し直後は v1.1.0 が存在しなかった。** 両プロジェクトが同じ v1.0.0 を指していた。
-**その後 Namazu が OTA 等のために v1.1.0〜v1.6.0 を切っており(全て後方互換の追加)、
-現在の pin は両プロジェクトとも v1.6.0。**「バージョンを分けない」という決定の意味は
+**その後 Namazu が OTA・実機障害対策等のために v1.1.0〜v2.12.0 を切っており
+（`v2.0.0` だけはヘッダ配列のnullptr終端化という破壊的変更を含む）、
+現在の pin は両プロジェクトとも v2.12.0。**「バージョンを分けない」という決定の意味は
 「Electabuzz 用に無理にタグを切らない」ことであって、「タグが増えない」ことではない
 ——増やすべき側(実機とテストが揃っている Namazu)が増やすぶんには、この判断と矛盾しない。
 
@@ -362,8 +375,8 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
 **結合が不可視**になる。「動いていたものが、何も変えていないのに再ビルドで壊れる」
 という最悪の壊れ方をする。
 
-- `lib_deps = ...git#v1.6.0` — **タグ**を指す
-- `requirements.txt` に `git+https://.../batch-uplink@v1.6.0` — **タグ**を指す
+- `lib_deps = ...git#v2.12.0` — **タグ**を指す
+- `requirements.txt` に `git+https://.../batch-uplink@v2.12.0` — **タグ**を指す
 - 共有レポ側で **タグを打ち替えない**(打ち替えたら pin の意味が消える)
 
 ---
@@ -376,8 +389,8 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
   Python は `auth`・`devices`・`notify`・`s3util`。**これ以上は入れるな。**
   ドメインが混ざった瞬間に共有ライブラリとしての価値が消える
   (`WireFormat.h` が入っていないのはこの原則どおりの帰結だ)
-- **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v1.6.0）。**自分の都合でしか動かさない**
-- **`Electabuzz`**: `batch-uplink` に pin（現在 v1.6.0。Namazu と同じタグを指す）。
+- **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v2.12.0）。**自分の都合でしか動かさない**
+- **`Electabuzz`**: `batch-uplink` に pin（現在 v2.12.0。Namazu と同じタグを指す）。
   `lib/GridFreq/`(GFRQワイヤ形式)、`lib/Goertzel/`(単一ビンDFT)、
   `wire_gridfreq`、`tools/gridfreq/`(参照実装 + backtest)、独立 Terraform state
 - **ワイヤ形式は `batch-uplink` に入れない。** `Batch` がレイアウト非依存になるので、

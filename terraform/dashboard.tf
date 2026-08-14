@@ -1,7 +1,6 @@
 # ダッシュボード配信: 非公開S3 + CloudFront(OAC)。認証なしで誰でも閲覧可。
-# Namazuの terraform/dashboard.tf と同じ構成。**カスタムドメインは無し**——
-# CloudFrontの既定ドメインで足りるうちは、ACM(us-east-1)や外部DNSリポジトリとの
-# 手順の絡み合いを持ち込まない(→ 必要になったらNamazuのcustom_domain.tfを参照)。
+# Namazuの terraform/dashboard.tf と同じ構成。カスタムドメイン(electabuzz.dark-kuins.net)を
+# aliasとして持つ——ACM証明書の発行・検証やlocal.custom_domain_enabledは custom_domain.tf 側。
 resource "aws_s3_bucket" "dashboard" {
   bucket = local.dash_bucket
   # 静的ファイルだけなので destroy 時に中身ごと消せるようにする（作り直しが多い）。
@@ -42,6 +41,7 @@ resource "aws_cloudfront_response_headers_policy" "dashboard_no_cache" {
 resource "aws_cloudfront_distribution" "dashboard" {
   enabled             = true
   default_root_object = "index.html"
+  aliases             = local.custom_domain_enabled ? [var.dashboard_domain] : []
 
   origin {
     domain_name              = aws_s3_bucket.dashboard.bucket_regional_domain_name
@@ -64,8 +64,20 @@ resource "aws_cloudfront_distribution" "dashboard" {
     }
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
+  # カスタムドメインありなら ACM(us-east-1)、なければ CloudFront 既定証明書。
+  dynamic "viewer_certificate" {
+    for_each = local.custom_domain_enabled ? [1] : []
+    content {
+      acm_certificate_arn      = local.cert_arn
+      ssl_support_method       = "sni-only"
+      minimum_protocol_version = "TLSv1.2_2021"
+    }
+  }
+  dynamic "viewer_certificate" {
+    for_each = local.custom_domain_enabled ? [] : [1]
+    content {
+      cloudfront_default_certificate = true
+    }
   }
 
   price_class = "PriceClass_200"

@@ -35,6 +35,7 @@ resource "aws_cloudfront_cache_policy" "api" {
 
 resource "aws_cloudfront_distribution" "api" {
   enabled = true
+  aliases = local.custom_domain_enabled ? [var.api_domain] : []
 
   origin {
     domain_name = trimsuffix(trimprefix(aws_lambda_function_url.api.function_url, "https://"), "/")
@@ -62,8 +63,20 @@ resource "aws_cloudfront_distribution" "api" {
     }
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
+  # カスタムドメインありなら ACM(us-east-1)、なければ CloudFront 既定証明書(→ custom_domain.tf)。
+  dynamic "viewer_certificate" {
+    for_each = local.custom_domain_enabled ? [1] : []
+    content {
+      acm_certificate_arn      = local.cert_arn
+      ssl_support_method       = "sni-only"
+      minimum_protocol_version = "TLSv1.2_2021"
+    }
+  }
+  dynamic "viewer_certificate" {
+    for_each = local.custom_domain_enabled ? [] : [1]
+    content {
+      cloudfront_default_certificate = true
+    }
   }
 
   price_class = "PriceClass_200"
