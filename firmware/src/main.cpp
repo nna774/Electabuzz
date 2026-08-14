@@ -34,13 +34,18 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 
 #include "DeviceIdentity.h"
 #include "Goertzel.h"
 #include "GridFreqWire.h"
 #include "LedStatus.h"
 #include "MeasuringSntp.h"
+#include "NmeaGga.h"
+#include "NmeaLineReader.h"
 #include "NtpTimebase.h"
+#include "PpsEdgeDetector.h"
+#include "PpsTimebase.h"
 #include "TimeSync.h"
 #include "Uploader.h"
 #include "config.h"
@@ -85,6 +90,18 @@ QueueHandle_t gI2sQueue = nullptr;
 // std::atomic にしてあるのは、Core0（fs がロックした瞬間に生成する）から
 // Core1（i2sTask で毎回読む）への書き込みをポインタ単位で安全に見せるため。
 std::atomic<gridfreq::GoertzelEstimator*> gRecordGoertzel{nullptr};
+
+// --- PPS(方式A、R ch)。他モードでは null のままで何も起きない ---
+//
+// gRecordGoertzelと同じ「record modeでだけ非null」パターン。**一度構築したら
+// 差し替えない**——Goertzelと違い、gEdgeDetectorはfsの値に依存しない生のR ch
+// フィルタなので、NTP/PPSロックのたびに作り直す理由が無い。
+// setup()でxTaskCreatePinnedToCore(i2sTask, ...)より前に構築すること
+// （構築前にi2sTaskがfeed()を呼んでしまわないように、既存のgRecordGoertzelと
+// 同じ理由）。
+std::atomic<ppsedge::PpsEdgeDetector*> gEdgeDetector{nullptr};
+QueueHandle_t gPpsEdgeQueue = nullptr;  // Core1(検出) → Core0(回帰) への橋渡し
+
 struct WindowRecord {
   uint64_t cyclesQ16;
   // この窓が完成した**瞬間**の累積フレーム数（gFrames）。pumpI2s() が確定させる。
@@ -94,6 +111,7 @@ struct WindowRecord {
   // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md の再発版）。
   uint64_t framesAtEnd;
   bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
+  uint16_t vRmsMv;      // トランス二次側の実効値[mV]（→ computeVRmsMv()）
 };
 QueueHandle_t gWindowQueue = nullptr;
 bool gPendingDiscontinuity = false;  // gI2sMux で保護する
@@ -118,6 +136,30 @@ const char* u64str(uint64_t v, char* buf, size_t n) {
   while (i > 0 && j + 1 < n) buf[j++] = tmp[--i];
   buf[j] = '\0';
   return buf;
+}
+
+// GoertzelEstimator::magnitude() の窓振幅から `v_rms_mv`(トランス二次側の
+// 実効値[mV])を逆算する。**呼ぶのは `addSample()` が true を返した直後だけ**
+// ——magnitude() は次の窓が確定すると上書きされる。
+//
+// 経路: ADCコード振幅 → PCM1808入力(node A)の電圧振幅 → AFE分圧を戻して
+// トランス二次側の電圧振幅 → 実効値[mV]。基準点の決定は
+// docs/log/2026-08-13-vrms-basis-point-decision.md、定数の根拠は
+// config.h の該当節（docs/hardware.md 由来）。
+uint16_t computeVRmsMv(double magnitude, size_t windowSamples) {
+  if (windowSamples == 0) return 0;
+  // 単一ビンDFTの振幅は正弦波1本なら概ね A*N/2 になる
+  // (firmware/lib/Goertzel/test/test_goertzel.cpp で検証済み)。
+  const double ampCode = 2.0 * magnitude / static_cast<double>(windowSamples);
+  // フルスケール(コード = 2^23)が 0.3×VCC[V]（データシートの 0.6×VCC Vpp の半分）
+  // に対応する。
+  const double nodeAPeakVolts = (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts);
+  // AFE分圧(ADC入力インピーダンスの負荷込み)を逆算してトランス二次側へ戻す。
+  const double secondaryPeakVolts = nodeAPeakVolts / kAfeDividerRatio;
+  const double secondaryRmsMv = (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0;
+  if (secondaryRmsMv <= 0.0) return 0;
+  if (secondaryRmsMv >= 65535.0) return 65535;
+  return static_cast<uint16_t>(secondaryRmsMv + 0.5);
 }
 
 bool startI2s() {
@@ -202,10 +244,24 @@ void pumpI2s() {
       if (r > rMax) rMax = r;
 
       // 記録モードでのみ非null。他モードはロード1回ぶんのコストで済む。
+      ppsedge::PpsEdgeDetector* edge = gEdgeDetector.load(std::memory_order_relaxed);
+      if (edge != nullptr) {
+        // **rはそのまま渡す。オフセット計算はしない。** gEdgeDetectorの内部
+        // サンプルカウンタは構築直後から1個ずつfeed()された回数を数えるだけなので、
+        // 「Goertzelと同時に、i2sTask起動前に一度だけ構築し以後resetしない」を
+        // 守っていれば、gFrames基準の絶対ティックと自動的に1対1で対応する
+        // (→ docs/log/2026-08-12-main-integration-design.md)。
+        double edgeTicks;
+        if (edge->feed(static_cast<double>(r), edgeTicks) && gPpsEdgeQueue != nullptr) {
+          xQueueSend(gPpsEdgeQueue, &edgeTicks, 0);
+        }
+      }
+
       gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
       if (g != nullptr && g->addSample(l)) {
         WindowRecord rec{};
         rec.cyclesQ16 = g->cyclesQ16();
+        rec.vRmsMv = computeVRmsMv(g->magnitude(), g->windowSamples());
         // **窓が完成した「その瞬間」のフレーム数。** Core0 がこのレコードを
         // xQueueReceive するまでの遅延（NTP問い合わせ等）に一切依存しない。
         rec.framesAtEnd = framesBeforeThisRead + i + 1;
@@ -365,6 +421,22 @@ bool gBatchDiscontinuity = false;
 // 再ロック時にまた作り直しが起きるだけでよい。
 bool gFsSourceWasNtp = false;
 
+// --- PPS(方式A)。→ docs/log/2026-08-12-main-integration-design.md ---
+//
+// gFs(NtpTimebase)と役割を分ける: gPpsはfsの精度だけを持ち、絶対時刻への固定
+// (batchStartUs)は引き続きgFsが担う。gPpsTimebaseにunixUsAt()相当を持たせて
+// いないのはこのため(→ docs/log/2026-08-12-pps-timebase-impl.md)。
+timebase::PpsTimebase gPps(kFsNominalMicroHz);
+// gFsSourceWasNtpと同じ役目の遷移検出フラグ。PPSロックの瞬間だけGoertzelを
+// (NTPロック時よりさらに精度の良いfsで)もう一段作り直す。
+bool gPpsSourceWasPps = false;
+
+// GNSS UART(Serial1)読み取り。→ firmware/lib/GnssNmea/
+gnss::NmeaLineReader gNmeaReader;
+// 直近に解析できたGGAのfix quality > 0。UBX-MON-VERはu-centerでの手動確認で
+// 足りると判断しfirmwareでは扱わない(→ docs/log/2026-08-12-gnss-nmea-impl.md)。
+bool gGnssFix = false;
+
 // NOMINAL区間のバッチ起点計算用アンカー。**timesync::isSynced()が初めてtrueに
 // なった瞬間に遅延取得する**(0 = 未取得)。setup()の時点で無条件に読むと、
 // SNTPの初回同期がまだ済んでいない場合(実測で発生した——WiFi接続直後は
@@ -392,7 +464,8 @@ uint64_t gNominalAnchorFrames = 0;  // アンカー取得時点のrec.framesAtEn
 // Uploaderは「指定したヘッダの値を読んで返す」だけの汎用API(v1.6.0)で、
 // 意味づけはここが持つ。
 constexpr const char* kOtaVersionHeader = "X-Elbz-Ota-Version";
-constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
+// batch-uplink v2.0.0でnullptr終端方式になった(末尾にnullptrを置く。本数引数は無い)。
+constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader, nullptr};
 
 // リクエスト側に乗せて送るヘッダ。今のビルド版数・空きヒープ・起動からの経過を
 // 毎バッチingestへ渡す——GFRQのワイヤ形式(testdata/gfrq_v1_golden.hexで固定された
@@ -401,7 +474,9 @@ constexpr const char* kOtaWatchedHeaders[] = {kOtaVersionHeader};
 constexpr const char* kFwVersionHeader = "X-Elbz-Fw-Version";
 constexpr const char* kHeapFreeHeader = "X-Elbz-Heap-Free";
 constexpr const char* kUptimeHeader = "X-Elbz-Uptime-Us";
-constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader};
+// namesはnullptr終端(v2.0.0)。valuesは同じ本数分で終端不要。
+constexpr const char* kTelemetryHeaderNames[] = {kFwVersionHeader, kHeapFreeHeader, kUptimeHeader,
+                                                  nullptr};
 char sFwVersionBuf[32];  // setup()で一度だけ埋める(ビルド中に変わらない)
 char sHeapFreeBuf[16];   // loop()が送信直前に毎周更新する
 char sUptimeBuf[24];
@@ -491,10 +566,16 @@ void setup() {
   pinMode(kLedTimebaseLockPin, OUTPUT);
   pinMode(kLedSpillBacklogPin, OUTPUT);
   pinMode(kLedFastSlowPin, OUTPUT);
+  pinMode(kLedPpsLockPin, OUTPUT);
   digitalWrite(kLedWifiPin, HIGH);  // WiFi接続が確立するまでは「切断中」を表す点灯
   digitalWrite(kLedTimebaseLockPin, LOW);
   digitalWrite(kLedSpillBacklogPin, LOW);
   digitalWrite(kLedFastSlowPin, LOW);
+  digitalWrite(kLedPpsLockPin, LOW);
+
+  // GNSS UART。CFG-TP5/CFG-NAV5はu-centerで一度EEPROMへ焼く前提なので、
+  // firmwareからは読むだけ(→ docs/log/2026-08-12-gnss-pps-wiring-plan.md)。
+  Serial1.begin(kGnssUartBaud, SERIAL_8N1, kGnssUartRxPin, kGnssUartTxPin);
 
   ensureWifi();
   timesync::begin(kNtpServers[0], kNtpServers[1],
@@ -546,16 +627,33 @@ void setup() {
                                        1.0),
       std::memory_order_relaxed);
 
+  // PPS(方式A)。gRecordGoertzelと同じく、i2sTask起動前に構築すること。
+  // 閾値は未校正のプレースホルダ(→ config.hのkPpsEdgeThresholdコメント)。
+  gPpsEdgeQueue = xQueueCreate(16, sizeof(double));
+  gEdgeDetector.store(
+      new ppsedge::PpsEdgeDetector(kPpsEdgeThreshold, kPpsEdgeRefractorySamples),
+      std::memory_order_relaxed);
+
   xTaskCreatePinnedToCore(i2sTask, "i2s_pump", 4096, nullptr, 5, nullptr, 1);
 
   // fw versionは実行中変わらないので一度だけ埋める(Uploaderはポインタを保持する
   // だけで値をコピーしない。ヒープ/uptimeはloop()側で毎周更新する)。
   snprintf(sFwVersionBuf, sizeof(sFwVersionBuf), "%s", ELBZ_FW_VERSION);
 
-  gUploader = new Uploader(gIdentity.ingestUrl.c_str(), /*alertUrl=*/"",
-                            gIdentity.hmacSecret.c_str(), gIdentity.deviceId, kMaxRamBatches,
-                            kSpillDir, /*dropOldestWhenFull=*/true, kOtaWatchedHeaders,
-                            1, kTelemetryHeaderNames, kTelemetryHeaderValues, 3);
+  // caCert: OTA取得(performPullOta)と同じAmazon Root CA 1を渡し、ingest送信も
+  // setInsecure()からTLS検証ありへ卒業する(batch-uplink v1.8.0)。
+  // discardSpillOn400: 電源断でLittleFSの退避ファイルが0バイト/途中で切れた場合、
+  // wire_gridfreq.parse()は「too short for header」のWireFormatErrorを投げ、
+  // ingestのhandler()はCrcMismatch以外のWireFormatErrorを汎用exceptで拾って
+  // 400を返す(lambda/ingest/handler.py)。この機体は測定対象の電源そのものに
+  // 給電されており、退避ファイル破損の起きやすさはNamazuより高いまである
+  // (→ NamazuHaUrokoGaNai docs/log/2026-08-11-spill-quarantine-on-400.md)。
+  gUploader = new Uploader(
+      gIdentity.ingestUrl.c_str(), /*alertUrl=*/"", gIdentity.hmacSecret.c_str(),
+      gIdentity.deviceId, kMaxRamBatches, kSpillDir, /*dropOldestWhenFull=*/true,
+      kOtaWatchedHeaders, kTelemetryHeaderNames, kTelemetryHeaderValues,
+      reinterpret_cast<const char*>(amazon_root_ca1_pem_start), /*maxSpillReadBytes=*/0,
+      /*discardSpillOn400=*/true);
   gUploader->begin();
 
   Serial.println("# recording started immediately (timebase_source=NOMINAL); "
@@ -585,6 +683,9 @@ void loop() {
     if (i2s.overflows != seenOverflows) {
       Serial.printf("# i2s overflow (total=%u); fs regression reset\n", i2s.overflows);
       gFs.reset();
+      // ドロップしたフレーム分だけgEdgeDetectorのサンプル計数とgFramesの対応が
+      // ズレるため、PPS回帰も測れなかった区間として切り捨てる(gFsと同じ理由)。
+      gPps.reset();
       seenOverflows = i2s.overflows;
     }
 
@@ -621,6 +722,48 @@ void loop() {
     gFsSourceWasNtp = nowNtp;
 
     gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
+  }
+
+  // PPSエッジをgPpsの回帰へ取り込む。NTPクエリ(128秒間隔)とは独立に毎周回す
+  // ——PPSエッジは1秒に1回来るので、NTPのタイミングに縛られると再武装が遅れる。
+  {
+    double edgeTicks;
+    while (gPpsEdgeQueue != nullptr && xQueueReceive(gPpsEdgeQueue, &edgeTicks, 0) == pdTRUE) {
+      gPps.addEdge(edgeTicks);
+    }
+
+    const bool nowPps = gPps.source() == timebase::Source::kPps;
+    digitalWrite(kLedPpsLockPin, nowPps ? HIGH : LOW);
+    if (nowPps && !gPpsSourceWasPps) {
+      // NTPロック時と同じ手順(2段目)。PPSはNTPよりさらに精度が良いので、
+      // NTPで一度武装した後でもPPSロック時にもう一段作り直す価値がある。
+      gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+      const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+      gRecordGoertzel.store(
+          new gridfreq::GoertzelEstimator(gFNominalHz,
+                                           static_cast<double>(gPps.fsMicroHz()) / 1e6, 1.0,
+                                           seedCycles),
+          std::memory_order_relaxed);
+      Serial.printf("# pps locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
+                    "resid_ns=%u\n",
+                    static_cast<double>(gPps.fsMicroHz()) / 1e6,
+                    static_cast<unsigned long long>(seedCycles), gPps.obsCount(),
+                    gPps.residualNs());
+    }
+    gPpsSourceWasPps = nowPps;
+  }
+
+  // GNSS UART。NMEAは1Hz程度でしか届かないので、I2Sのように詰まって溢れる
+  // 規模のデータ量ではない——available()が空になるまで読み切ってよい。
+  while (Serial1.available() > 0) {
+    const char c = static_cast<char>(Serial1.read());
+    if (gNmeaReader.feed(c)) {
+      gnss::GgaFix fix;
+      if (gnss::parseGga(gNmeaReader.line(), gNmeaReader.lineLen(), fix)) {
+        gGnssFix = fix.hasFix();
+      }
+      // GGA以外の行(GSA/RMC等)はparseGgaがfalseを返すだけで無害に無視される。
+    }
   }
 
   WindowRecord rec;
@@ -685,7 +828,7 @@ void loop() {
               : timesync::nowUs();
       gCurrentBatch->begin(batchStartUs);
     }
-    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, /*vRmsMv=*/0, /*flags=*/0);
+    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, rec.vRmsMv, /*flags=*/0);
     if (rec.discontinuity) gBatchDiscontinuity = true;
 
     if (gCurrentBatch->isFull()) {
@@ -693,16 +836,22 @@ void loop() {
       hf.device_id = gIdentity.deviceId;
       hf.session_id = gSessionId;
       hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
-      hf.fs_measured_uhz = gFs.fsMicroHz();
-      hf.tb_obs_count = gFs.obsCount();
-      hf.tb_residual_ns = gFs.residualNs();
-      hf.flags = gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0;
-      // **正直にそのバッチ時点のgFs.source()を申告する。** ロック前はNOMINAL、
-      // ロック後はNTP(PPSが無いのでPPSを名乗ることはない)。1バッチはこの粒度
-      // でしか源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で
-      // 代表させる(→ docs/log/2026-08-08-nominal-window-open-question.md)。
-      hf.timebase_source =
-          gFs.source() == timebase::Source::kNtp ? kGfrqTbNtp : kGfrqTbNominal;
+
+      // **正直にそのバッチ時点の源を申告する。** PPSが使えるならfs関連の3値は
+      // PPS優先(NTPより桁で精度が良い)、絶対時刻(batchStartUs)への固定は
+      // 引き続きgFs(NtpTimebase)が担う役割分担のまま変えていない
+      // (→ docs/log/2026-08-12-pps-timebase-impl.md)。1バッチはこの粒度でしか
+      // 源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で代表させる
+      // (→ docs/log/2026-08-08-nominal-window-open-question.md と同じ考え方)。
+      const bool ntpUsable = gFs.source() == timebase::Source::kNtp;
+      const bool ppsUsable = gPps.source() == timebase::Source::kPps;
+      hf.fs_measured_uhz = ppsUsable ? gPps.fsMicroHz() : gFs.fsMicroHz();
+      hf.tb_obs_count = ppsUsable ? gPps.obsCount() : gFs.obsCount();
+      hf.tb_residual_ns = ppsUsable ? gPps.residualNs() : gFs.residualNs();
+      hf.timebase_source = ppsUsable ? (ntpUsable ? kGfrqTbPpsNtp : kGfrqTbPps)
+                                      : (ntpUsable ? kGfrqTbNtp : kGfrqTbNominal);
+      hf.flags = (gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0) |
+                 (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0);
       hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
       gridfreq::fillHeader(*gCurrentBatch, hf);
 

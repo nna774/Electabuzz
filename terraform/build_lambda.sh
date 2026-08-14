@@ -16,7 +16,7 @@ PY="${PYTHON:-python3}"
 
 # firmware/platformio.ini の lib_deps と揃えること（同じコードの両面なので、
 # 片方だけ動かすと食い違う → docs/batch-uplink.md）。
-UPLINK_VERSION="v1.6.0"
+UPLINK_VERSION="v2.12.0"
 
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
