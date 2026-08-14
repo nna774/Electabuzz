@@ -43,8 +43,11 @@ GNSS到着待ちのフェーズ2(PPS)と、それ以降のdetect(フェーズ9)�
   **実際に`ingest`まで届き、`series/`に着弾することを確認済み**
 - **クラウド**: `lambda/ingest/`（受信）+ `lambda/api/`（`/recent`のみ。
   detect/生存台帳が無いので`/events`・`/devices`は無い）。送信基盤は
-  [batch-uplink](https://github.com/nna774/batch-uplink) **v1.6.0**
-  （pinはNamazu側の後方互換な追加のみでv1.0.0から上げた）
+  [batch-uplink](https://github.com/nna774/batch-uplink) **v2.12.0**
+  （2026-08-11、TLSハンドシェイクタイムアウト短縮・CA証明書ピン留め・spillの
+  破損隔離(`discardSpillOn400`)を取り込むため追従。`v2.0.0`のヘッダ配列
+  nullptr終端化に伴い呼び出し側`main.cpp`も書き換え済み。実機投入はまだ
+  → [docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md](docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md)）
 - **`terraform/`**: ingest + api + dashboard 分を書いて **`apply`済み**。
   state はNamazuと同じ保存先バケットの別keyで独立。detect/rollup/watchdogは
   対応するLambdaが無いのでまだ書いていない
@@ -149,7 +152,7 @@ terraform は対応する Lambda がまだ無いので書いていない（フ�
   家庭用地震計。**実機稼働中。壊すな。**
   送信基盤の大半をここから流用する。`docs/*.md` の相対リンクはこのレポを指している
 - **[batch-uplink](https://github.com/nna774/batch-uplink)** — 両者が共有する送信基盤。
-  **v1.0.0 が出ている。タグで pin しろ**（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
+  **現在の pin は v2.12.0。タグで pin しろ**（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
 
 ## 7. 書きぶりの約束
 
