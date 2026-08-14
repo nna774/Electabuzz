@@ -28,16 +28,16 @@
 |---|---|
 | **レコードの `flags`** | ビットを1つも割り当てていない。**何を品質として立てるかは位相推定の実装が決める**ので、それが在るまで決めない（今決めるのは「存在しない要件への一般化」）。フィールドは確保済み。**2026-08-12、候補が1つ具体化した**——AC入力線の断線検知(Goertzelビンのエネルギーがしきい値未満で継続)を表すビット。→ [wire-format.md](wire-format.md)、[risks.md](risks.md)リスク13 |
 
-**`v_rms_mv` の基準点**は片付いた(2026-08-13)。**トランス二次側の実効値[mV]に決定**——
-壁側(商用100V系)への換算は持たない。用途(電圧異常・停電判定)は相対的な落ち込みが
-見えれば足り、分圧比(固定の設計値)だけで完結させ、個体差のあるトランス巻数比という
-校正定数をワイヤフォーマットに持ち込まずに済む。壁側電圧が要る場面が来たら、
-巻数比の定数(→ [hardware.md](hardware.md)「電源」節、暫定値≈9.71倍・未校正)を使って
-downstream側で計算する。**測る能力自体は元々あった**——`GoertzelEstimator::magnitude()`
-(`firmware/lib/Goertzel/src/Goertzel.h:55`)が窓ごとのビン振幅を計算済みで、現状は
-50/60Hz判別にしか使っていない(`firmware/src/main.cpp:533`)。**firmwareへの配線
-(ADCコード→volt換算、`main.cpp:688`の`vRmsMv=0`固定を実値へ)は未着手のまま**。
-→ [wire-format.md](wire-format.md)、[log/2026-08-13-vrms-basis-point-decision.md](log/2026-08-13-vrms-basis-point-decision.md)
+**`v_rms_mv` の基準点**は片付いた(2026-08-13決定・2026-08-14 firmware配線完了)。
+**トランス二次側の実効値[mV]**——壁側(商用100V系)への換算は持たない。用途(電圧異常・
+停電判定)は相対的な落ち込みが見えれば足り、分圧比(固定の設計値)だけで完結させ、
+個体差のあるトランス巻数比という校正定数をワイヤフォーマットに持ち込まずに済む。
+壁側電圧が要る場面が来たら、巻数比の定数(→ [hardware.md](hardware.md)「電源」節、
+暫定値≈9.71倍・未校正)を使ってdownstream側で計算する。`main.cpp:688`の
+`vRmsMv=0`固定は`GoertzelEstimator::magnitude()`からの実値へ置き換え済み——
+**残るのは実機での確認(実データ着弾・実測トランス電圧との比較)だけ**。
+→ [wire-format.md](wire-format.md)、[log/2026-08-13-vrms-basis-point-decision.md](log/2026-08-13-vrms-basis-point-decision.md)、
+[log/2026-08-14-vrms-firmware-wiring.md](log/2026-08-14-vrms-firmware-wiring.md)
 
 **バッチ境界のタイムスタンプジャンプの直し方**は片付いた(2026-08-09)。**NOMINAL区間**は固定アンカー+公称fsの線形外挿(境界dt=1.0000秒 stdev=0、実機確認済み)。**NTPロック済み区間**は「`unixUsAt()`の統一で解消」という以前の評価が観測数の多い成熟した回帰でしか検証できておらず不十分だったと判明(→ powerk95外部照合と並行セッションによる独立な再検証(261境界の全数走査)で16件・最大244.5mHzの残存異常を発見)。決定打はAPI側で、`lambda/api/handler.py`の周波数計算をジッタを含む実測dtから`record_rate_mhz`由来の理論値に切り替え、実データ・外部照合の両方で異常が事実上解消することを確認した(firmware側の回帰原点ロールフォワードも実装したが、A/Bテストで効果は約30%縮小に留まる緩和策)。→ [risks.md](risks.md)リスク12、[log/2026-08-09-nominal-anchor-fix.md](log/2026-08-09-nominal-anchor-fix.md)(NOMINAL側)、[log/2026-08-09-batch-boundary-jump-regression-cause.md](log/2026-08-09-batch-boundary-jump-regression-cause.md)(NTP側、原因特定)、[log/2026-08-09-batch-boundary-jump-ntp-fix.md](log/2026-08-09-batch-boundary-jump-ntp-fix.md)(NTP側、対策)
 
