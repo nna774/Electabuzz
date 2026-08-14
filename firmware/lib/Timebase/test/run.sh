@@ -15,3 +15,9 @@ g++ -std=gnu++17 -Wall -Wextra -Werror -I "$SRC" \
   -o "$OUT/test_ntp_timebase" \
   "$HERE/test_ntp_timebase.cpp" "$SRC/NtpTimebase.cpp"
 "$OUT/test_ntp_timebase"
+
+# PpsTimebase（方式Aの回帰）も同じくArduino非依存。→ docs/log/2026-08-12-gnss-pps-wiring-plan.md
+g++ -std=gnu++17 -Wall -Wextra -Werror -I "$SRC" \
+  -o "$OUT/test_pps_timebase" \
+  "$HERE/test_pps_timebase.cpp" "$SRC/PpsTimebase.cpp"
+"$OUT/test_pps_timebase"
