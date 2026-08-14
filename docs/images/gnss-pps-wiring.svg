@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 820" font-family="Menlo, Consolas, monospace" font-size="13">
+  <title>GNSS(NEO-M8N) 配線図 — フェーズ2(PPS)着手前の設計案</title>
+  <desc>
+    アンテナ到着前に確定できる配線案。黒実線は既存(確定・実配線済み)、
+    青破線は新規(未実装・設計案のみ)を表す。
+  </desc>
+
+  <defs>
+    <marker id="arrowBlack" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#222"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#1a5fb4"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="820" fill="#ffffff"/>
+
+  <defs>
+    <marker id="dotBlue" markerWidth="6" markerHeight="6" refX="3" refY="3">
+      <circle cx="3" cy="3" r="2.6" fill="#1a5fb4"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="26" font-size="16" font-weight="bold" fill="#111">
+    Electabuzz — GNSS(NEO-M8N) 配線図（2026-08-12、フェーズ2着手前の設計案・未実装）
+  </text>
+
+  <!-- ===== アンテナ (未着) ===== -->
+  <rect x="20" y="150" width="170" height="50" rx="6" fill="#fff" stroke="#888" stroke-dasharray="5,4"/>
+  <text x="105" y="172" text-anchor="middle" fill="#555">アクティブアンテナ</text>
+  <text x="105" y="188" text-anchor="middle" fill="#555" font-size="11">(未着・輸送中)</text>
+  <line x1="105" y1="200" x2="105" y2="230" stroke="#222" stroke-width="1.5" marker-end="url(#arrowBlack)"/>
+  <text x="112" y="218" fill="#555" font-size="11">SMA</text>
+
+  <!-- ===== GNSS module (到着済み) ===== -->
+  <rect x="20" y="232" width="180" height="180" rx="6" fill="#fff" stroke="#222" stroke-width="1.5"/>
+  <text x="110" y="252" text-anchor="middle" font-weight="bold">GNSS NEO-M8N</text>
+  <text x="110" y="268" text-anchor="middle" font-size="11" fill="#555">(受信機は到着済み)</text>
+  <line x1="20" y1="278" x2="200" y2="278" stroke="#ccc"/>
+  <text x="35" y="298">VCC</text>
+  <text x="35" y="323">GND</text>
+  <text x="35" y="348">TXD</text>
+  <text x="35" y="373">RXD</text>
+  <text x="35" y="398" font-weight="bold">PPS</text>
+
+  <!-- pin exit lines -->
+  <line x1="200" y1="293" x2="330" y2="293" stroke="#222" stroke-width="1.5"/>
+  <line x1="200" y1="318" x2="330" y2="318" stroke="#222" stroke-width="1.5"/>
+  <line x1="200" y1="343" x2="330" y2="343" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <line x1="200" y1="368" x2="330" y2="368" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <line x1="200" y1="393" x2="330" y2="393" stroke="#1a5fb4" stroke-width="2" stroke-dasharray="5,4"/>
+
+  <!-- ===== 電源: 既存(PCM1808と共通) ===== -->
+  <rect x="330" y="270" width="260" height="55" rx="6" fill="#fff" stroke="#222" stroke-width="1.5"/>
+  <text x="460" y="292" text-anchor="middle">ESP32 5V/3.3V + GND</text>
+  <text x="460" y="308" text-anchor="middle" font-size="11" fill="#555">(PCM1808 給電と共通・既存)</text>
+  <line x1="590" y1="297" x2="620" y2="297" stroke="#222" stroke-width="1.5" marker-end="url(#arrowBlack)"/>
+
+  <!-- ===== UART: 新規 ===== -->
+  <rect x="330" y="335" width="260" height="65" rx="6" fill="#eef4ff" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="460" y="356" text-anchor="middle" font-weight="bold" fill="#1a5fb4">ESP32 Serial1 (新規)</text>
+  <text x="460" y="373" text-anchor="middle" font-size="11" fill="#1a5fb4">GPIO2 (RX) ← TXD</text>
+  <text x="460" y="389" text-anchor="middle" font-size="11" fill="#1a5fb4">GPIO1 (TX) → RXD</text>
+  <line x1="460" y1="400" x2="460" y2="430" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowBlue)"/>
+
+  <rect x="330" y="432" width="260" height="55" rx="6" fill="#eef4ff" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="460" y="453" text-anchor="middle" font-size="12" fill="#1a5fb4">UBX-MON-VER 確認</text>
+  <text x="460" y="470" text-anchor="middle" font-size="11" fill="#1a5fb4">fix 状態監視（要 firmware 実装）</text>
+
+  <!-- ===== PPS: 新規AFE(実回路図) ===== -->
+  <rect x="330" y="510" width="290" height="210" rx="6" fill="#eef4ff" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="475" y="530" text-anchor="middle" font-weight="bold" fill="#1a5fb4">R ch AFE（新規・未実装）</text>
+
+  <!-- PPS入力 → R1 → nodeB -->
+  <text x="345" y="557" font-size="12" fill="#1a5fb4">PPS</text>
+  <line x1="378" y1="562" x2="400" y2="562" stroke="#1a5fb4" stroke-width="1.5"/>
+  <rect x="400" y="555" width="55" height="14" fill="#fff" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="427" y="550" text-anchor="middle" font-size="10.5" fill="#1a5fb4">R1</text>
+  <text x="427" y="581" text-anchor="middle" font-size="9.5" fill="#1a5fb4">100kΩ</text>
+  <line x1="455" y1="562" x2="500" y2="562" stroke="#1a5fb4" stroke-width="1.5"/>
+  <circle cx="500" cy="562" r="3" fill="#1a5fb4"/>
+
+  <!-- nodeB → PCM1808 R IN(箱の外の既存矢印まで) -->
+  <line x1="500" y1="562" x2="600" y2="562" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="600" y1="562" x2="600" y2="585" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="600" y1="585" x2="620" y2="585" stroke="#1a5fb4" stroke-width="1.5"/>
+
+  <!-- nodeB → 分岐(junction) -->
+  <line x1="500" y1="562" x2="500" y2="600" stroke="#1a5fb4" stroke-width="1.5"/>
+  <circle cx="500" cy="600" r="3" fill="#1a5fb4"/>
+
+  <!-- 左枝: R2 → GND -->
+  <line x1="500" y1="600" x2="420" y2="600" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="420" y="592" text-anchor="middle" font-size="10.5" fill="#1a5fb4">R2</text>
+  <line x1="420" y1="600" x2="420" y2="608" stroke="#1a5fb4" stroke-width="1.5"/>
+  <rect x="397" y="608" width="46" height="14" fill="#fff" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="420" y1="622" x2="420" y2="645" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="420" y="637" text-anchor="middle" font-size="9.5" fill="#1a5fb4">6.8kΩ</text>
+
+  <!-- 右枝: C1 → GND(コンデンサ記号=平行2枚板) -->
+  <line x1="500" y1="600" x2="575" y2="600" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="575" y="592" text-anchor="middle" font-size="10.5" fill="#1a5fb4">C1</text>
+  <line x1="575" y1="600" x2="575" y2="611" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="558" y1="611" x2="592" y2="611" stroke="#1a5fb4" stroke-width="2"/>
+  <line x1="558" y1="618" x2="592" y2="618" stroke="#1a5fb4" stroke-width="2"/>
+  <line x1="575" y1="618" x2="575" y2="645" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="575" y="633" text-anchor="middle" font-size="9.5" fill="#1a5fb4">15nF</text>
+
+  <!-- GNDバス + 接地記号 -->
+  <line x1="420" y1="645" x2="575" y2="645" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="487" y1="650" x2="508" y2="650" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="490" y1="655" x2="505" y2="655" stroke="#1a5fb4" stroke-width="1.5"/>
+  <line x1="493" y1="660" x2="502" y2="660" stroke="#1a5fb4" stroke-width="1.5"/>
+  <text x="497" y="675" text-anchor="middle" font-size="10.5" fill="#1a5fb4">GND</text>
+
+  <text x="475" y="694" text-anchor="middle" font-size="10" fill="#555">R2とC1は同じノードからGNDへの並列2本。R INもそのノードを見る。</text>
+  <text x="475" y="707" text-anchor="middle" font-size="10" fill="#555">hardware.md「アナログフロントエンド(AFE)」のL ch図と同一回路構成</text>
+
+  <line x1="620" y1="585" x2="655" y2="585" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowBlue)"/>
+
+  <!-- ===== PCM1808 (既存) ===== -->
+  <rect x="655" y="330" width="200" height="205" rx="6" fill="#fff" stroke="#222" stroke-width="1.5"/>
+  <text x="755" y="352" text-anchor="middle" font-weight="bold">PCM1808（既存・無改造）</text>
+  <line x1="655" y1="362" x2="855" y2="362" stroke="#ccc"/>
+  <text x="670" y="383">L IN  ← 既存AFE（商用波形）</text>
+  <text x="670" y="405" fill="#1a5fb4">R IN  ← 新AFE（PPS）</text>
+  <text x="670" y="430">SCK  → ESP32 GPIO16 (MCLK)</text>
+  <text x="670" y="452">BCK  → ESP32 GPIO17</text>
+  <text x="670" y="474">LRC  → ESP32 GPIO18</text>
+  <text x="670" y="496">OUT  → ESP32 GPIO15 (DIN)</text>
+  <text x="670" y="518" font-size="11" fill="#555">FMT/MD0/MD1 開放（既存）</text>
+
+  <line x1="755" y1="530" x2="755" y2="560" stroke="#222" stroke-width="1.5" marker-end="url(#arrowBlack)"/>
+  <rect x="655" y="562" width="200" height="80" rx="6" fill="#eef4ff" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="755" y="583" text-anchor="middle" font-size="12" fill="#1a5fb4">Core1: Goertzel(L)</text>
+  <text x="755" y="601" text-anchor="middle" font-size="12" fill="#1a5fb4">+ PPSエッジ検出(R)</text>
+  <text x="755" y="619" text-anchor="middle" font-size="11" fill="#1a5fb4">→ PpsTimebase（要新規実装）</text>
+  <text x="755" y="634" text-anchor="middle" font-size="10.5" fill="#555">(Nominal/Ntpと同型)</text>
+
+  <!-- ===== GPIO8 status LED (reserved, unimplemented) ===== -->
+  <rect x="700" y="60" width="260" height="60" rx="6" fill="#fff" stroke="#888" stroke-dasharray="5,4"/>
+  <text x="830" y="82" text-anchor="middle" fill="#555">GPIO8 → PPSロック表示LED(緑)</text>
+  <text x="830" y="100" text-anchor="middle" fill="#555" font-size="11">config.h に予約済み・回路/コードは未実装</text>
+
+  <!-- ===== legend ===== -->
+  <line x1="20" y1="760" x2="60" y2="760" stroke="#222" stroke-width="1.5"/>
+  <text x="68" y="764" font-size="12" fill="#222">既存・確定（実配線済み or 設計確定）</text>
+  <line x1="20" y1="782" x2="60" y2="782" stroke="#1a5fb4" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="68" y="786" font-size="12" fill="#1a5fb4">新規ブロック・未実装（枠は破線、内部の回路配線は実線）</text>
+  <line x1="450" y1="760" x2="490" y2="760" stroke="#888" stroke-dasharray="5,4"/>
+  <text x="498" y="764" font-size="12" fill="#555">未着手・確認待ちの部品/機能</text>
+
+  <text x="20" y="808" font-size="11" fill="#888">
+    docs/log/2026-08-12-gnss-pps-wiring-plan.md 参照。GPIO1/2・R1/R2/C1値は設計案であり実配線・実測は未実施。
+  </text>
+</svg>
