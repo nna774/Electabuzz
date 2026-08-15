@@ -65,6 +65,43 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 生波形の常時保存は価値が低い。既存のイベント切り出し思想を踏襲し、
 **立ち上げ検証期間だけ `raw/` を有効化**して波形を眺めるのが賢い使い方。
 
+### `series/`・`bad/` の誤削除防止
+
+`series/` は再生成不可の唯一の原本、`bad/` はCRC不一致の隔離(捨てると
+証拠が消える→docs/cloud.md)で、どちらも再生成不可という点で同じ扱いが
+要る。IAM層とは別に誤削除を止める必要がある——実行者本人のAWS認証情報は
+Lambda IAMロールの制限を受けず、直接AWS CLI/コンソールから`DeleteObject`
+できてしまうため。dataバケット([s3.tf](../terraform/s3.tf))にバージョニングを
+有効化し、`series/*`・`bad/*`への`s3:DeleteObject`/`s3:DeleteObjectVersion`
+をDenyするバケットポリシーを追加した。NamazuHaUrokoGaNaiの`events/`誤削除防止
+([PR #85](https://github.com/nna774/NamazuHaUrokoGaNai/pull/85))と同じ構成。
+
+Namazu側では「S3 Lifecycle expirationはバケットポリシーのDenyを迂回する
+(AWSの既知の挙動——Lifecycle expirationはS3サービス内部の自動処理であり、
+特定のIAMプリンシパルによるリクエストとして発行されるわけではないため、
+バケットポリシー/IAMポリシーの評価対象外になる)」という穴があった。
+dataバケットにはcurrent versionを消すlifecycle ruleが無いため(冒頭の
+コメント参照)、「Denyしているのに`series/`・`bad/`のcurrent versionが
+黙って消える」という一番壊滅的な形ではElectabuzzに該当しない。将来
+`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・
+`bad/`を巻き込まないことを確認すること。
+
+**ただし同じ仕組みが、別の形で残っている。** `series_key()`/`bad_key()`は
+どちらも「同一内容の再送は同じキーに上書き」を意図的な設計として持つ
+(→`lambda/s3keys.py`)。batch-uplinkのspool/retryは通常運用で普通に
+起きるため、上書きのたびに旧バージョンがnoncurrent versionとして残り、
+掃除する仕組みが無いと無期限に積み上がって課金対象が増え続ける
+(検証セッションの指摘で発覚)。これに対処するため
+`noncurrent_version_expiration`(30日、暫定値)だけを持つlifecycle ruleを
+追加したが、これもLifecycle駆動の削除であることに変わりはなく、
+**Denyポリシーの有無に関わらずnoncurrent_daysで自動的に消える**——
+「`series/`・`bad/`を誤って上書きしてしまった場合に元のバージョンへ
+復旧できる猶予は、気づいてから30日以内に限られる」という形で効いてくる
+(→[terraform/s3.tf](../terraform/s3.tf)の`cleanup-noncurrent-versions`
+ルール直上のコメント)。Denyポリシーが守るのはcurrent versionの直接削除
+だけで、noncurrent versionの自動掃除までは守らない、というのが正確な
+言い方。
+
 ---
 
 ## 差分3: ロールアップ (既存にない新規要素)
