@@ -99,3 +99,24 @@ expireについては引き続き真だが、noncurrent version expireについ�
 Denyポリシーを迂回してnoncurrent versionを自動削除する、復旧猶予は
 30日が上限)を追加し、[docs/storage.md](../storage.md)の「別の話」という
 表現も「同じ仕組みが別の形で残っている」に書き直した。
+
+## 追記3: `terraform apply`を実施し、実値を確認した
+
+ユーザーの指示でPR #51を通常マージ(`gh pr merge --merge`)し、その後
+`terraform apply`を実施した。本体の作業ツリー(`/Users/nana/codes/Electabuzz`)
+にしか無い`terraform.tfvars`をこのworktreeへコピーしてから
+`terraform init`(S3バックエンド)→`terraform plan`で差分が意図通り
+3リソースの新規追加のみ(`aws_s3_bucket_versioning.data`・
+`aws_s3_bucket_policy.data`・`aws_s3_bucket_lifecycle_configuration.data`、
+既存リソースへの変更・削除はゼロ)であることを確認した上で適用した。
+
+適用後、AWS CLIで実値を直接確認した(NamazuのPR #85と同じ確認手順):
+
+- `aws s3api get-bucket-versioning`: `Status: Enabled`
+- `aws s3api get-bucket-policy`: `DenyDeleteSeriesAndBad`が`series/*`・`bad/*`
+  への`s3:DeleteObject`/`s3:DeleteObjectVersion`をDeny、意図通り
+- `aws s3api get-bucket-lifecycle-configuration`: `cleanup-noncurrent-versions`
+  ルールが`NoncurrentVersionExpiration.NoncurrentDays: 30`のみを持つ
+  (current versionのexpireは無し)、意図通り
+
+いずれもterraformのplanと一致しており、想定外の差分は無かった。
