@@ -252,7 +252,12 @@ function drawVrmsChart(cv, series, showWall) {
   }
   ctx.textAlign = 'left';
 
-  // 折れ線。欠測(v_rms_mv=0、未対応ファーム時代)をまたぐところは線をつながない。
+  // 折れ線。欠測(v_rms_mv=0、未対応ファーム時代)に加えて、series.continuous[i]が
+  // falseの点(セッション再起動・実測dtが想定間隔から大きく外れる=本当の欠測区間)
+  // でも前の点とはつながない。v_rms_mvは瞬時値でDISCONTINUITYでは抑制しない
+  // (→drawVrmsChart呼び出し元のhandler.py側コメント)ため、そこだけを見ると
+  // 「測れていない区間」まで直線でつながって見えてしまう
+  // ——continuousは時刻の実測ギャップだけを見て線をつなぐかどうかを判定する。
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -260,6 +265,7 @@ function drawVrmsChart(cv, series, showWall) {
   for (let i = 0; i < n; i++) {
     const v = valsV[i];
     if (v == null) { drawing = false; continue; }
+    if (series.continuous && series.continuous[i] === false) drawing = false;
     const px = x(series.t_us[i]);
     const py = y(Math.min(Math.max(v, yMin), yMax));
     if (!drawing) { ctx.moveTo(px, py); drawing = true; } else { ctx.lineTo(px, py); }

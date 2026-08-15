@@ -95,6 +95,18 @@ GFRQのバッチは30秒に1本しか増えないので、これは鮮度を犠�
 適用しない——値が存在する限りそのまま返す。壁側(商用100V系)への換算は
 このAPIの責務ではない(→ [wire-format.md](wire-format.md)「`v_rms_mv`の基準点」)。
 
+**`continuous`(bool配列、`t_us`と並行)も同時に返す**(2026-08-15)。
+`v_rms_mv`は値自体を抑制しないぶん、グラフ側が「直前の点と線をつないでよいか」を
+自前で判定する材料を失う——`freq_hz`のnullをそのまま使うとDISCONTINUITYの
+バッチ内まで律儀に線を切ってしまい、`v_rms_mv`を抑制しない設計と矛盾する。
+`continuous[i]`は`freq_hz`とは独立に、**実測の時間だけ**を見て決める:
+直前のレコードと`session_id`が同じで、かつ実測dtが`record_rate_mhz`から
+決まる想定間隔の2倍以内なら`true`。`suspect`(DISCONTINUITY)は見ない——
+その窓のタイムスタンプ自体は実測どおりで、資格があるのは時間そのものだけ
+だから。系列先頭(直前の点が無い)は`false`。ダッシュボードの電圧グラフは
+これで折れ線を切り、「測れなかった区間を測れたように見せない」原則を
+値を抑制せずに満たす(→ [dashboard/app.js](../dashboard/app.js)の`drawVrmsChart`)。
+
 瞬時周波数は`Record.cycles`(絶対累積位相)の隣接差分から`lambda/api/handler.py`の
 `_series_payload()`が計算する(バッチの読み込み自体は`lambda/store_gridfreq.py`)。
 **以下のいずれかに該当する隣接点はfreqを計算しない(null=系列の
