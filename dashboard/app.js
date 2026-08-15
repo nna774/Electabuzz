@@ -172,6 +172,95 @@ function drawFreqChart(cv, series) {
   }
 }
 
+function drawVrmsChart(cv, series) {
+  const { ctx, w, h } = fitCanvas(cv);
+  const fg = themeColor('--fg');
+  const line = themeColor('--line');
+  const accent = themeColor('--accent');
+  ctx.clearRect(0, 0, w, h);
+
+  const n = series.t_us.length;
+  if (n === 0) {
+    ctx.fillStyle = fg;
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillText('データなし', PAD, h / 2);
+    return;
+  }
+
+  // v_rms_mv=0はv_rms_mv未対応ファーム時代のレコード(常にゼロ埋め)を示す欠測扱い。
+  // トランス二次側の実効値が実測でちょうど0mVになることは無い(→ docs/wire-format.md)。
+  const vArr = series.v_rms_mv || [];
+  const valsV = vArr.map((v) => (v > 0 ? v / 1000 : null));
+  let vMin = Infinity, vMax = -Infinity;
+  for (const v of valsV) {
+    if (v == null) continue;
+    vMin = Math.min(vMin, v);
+    vMax = Math.max(vMax, v);
+  }
+  if (vMin === Infinity) {
+    ctx.fillStyle = fg;
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillText('データなし(v_rms_mv未対応)', PAD, h / 2);
+    return;
+  }
+
+  const t0 = series.start_us, t1 = series.end_us;
+  const margin = Math.max((vMax - vMin) * 0.15, 0.05);
+  const yMin = vMin - margin, yMax = vMax + margin;
+  const yMaxLabel = yMax.toFixed(2) + 'V';
+  const yMinLabel = yMin.toFixed(2) + 'V';
+
+  ctx.font = '11px system-ui, sans-serif';
+  const labelW = Math.max(ctx.measureText(yMaxLabel).width, ctx.measureText(yMinLabel).width);
+  const padLeft = Math.max(PAD, labelW + 12);
+  const plotW = w - padLeft - PAD;
+  const plotH = h - PAD * 2;
+
+  const x = (t) => padLeft + ((t - t0) / (t1 - t0 || 1)) * plotW;
+  const y = (v) => PAD + (1 - (v - yMin) / (yMax - yMin || 1)) * plotH;
+
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padLeft, PAD, plotW, plotH);
+
+  ctx.fillStyle = fg;
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(yMaxLabel, padLeft - 4, PAD + 4);
+  ctx.fillText(yMinLabel, padLeft - 4, PAD + plotH);
+  ctx.textAlign = 'left';
+
+  // 横軸(時刻)の目盛。drawFreqChartと同じ考え方(→そちらのコメント参照)。
+  const tickCount = Math.max(2, Math.min(6, Math.floor(plotW / 80) + 1));
+  ctx.fillStyle = fg;
+  ctx.strokeStyle = line;
+  for (let i = 0; i < tickCount; i++) {
+    const t = t0 + ((t1 - t0) * i) / (tickCount - 1);
+    const px = x(t);
+    ctx.beginPath();
+    ctx.moveTo(px, PAD + plotH);
+    ctx.lineTo(px, PAD + plotH + 4);
+    ctx.stroke();
+    ctx.textAlign = i === 0 ? 'left' : i === tickCount - 1 ? 'right' : 'center';
+    ctx.fillText(formatClock(t), px, PAD + plotH + 16);
+  }
+  ctx.textAlign = 'left';
+
+  // 折れ線。欠測(v_rms_mv=0、未対応ファーム時代)をまたぐところは線をつながない。
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let drawing = false;
+  for (let i = 0; i < n; i++) {
+    const v = valsV[i];
+    if (v == null) { drawing = false; continue; }
+    const px = x(series.t_us[i]);
+    const py = y(Math.min(Math.max(v, yMin), yMax));
+    if (!drawing) { ctx.moveTo(px, py); drawing = true; } else { ctx.lineTo(px, py); }
+  }
+  ctx.stroke();
+}
+
 // --- ステータス行・品質テーブル ---
 // deviceは生存台帳(/devices、→ docs/ota.md)の該当デバイス分。取得失敗時や
 // まだ生存台帳を立てていない環境ではnull——その場合はビルド版数等の行を
@@ -240,6 +329,7 @@ async function refresh() {
   try {
     const series = await apiGet(`/recent?minutes=${minutes}`);
     drawFreqChart(document.getElementById('freq-canvas'), series);
+    drawVrmsChart(document.getElementById('vrms-canvas'), series);
     // 生存台帳(/devices)は補助情報。取得できなくても(まだ立てていない環境・
     // 一時的な失敗)メインのグラフ・ステータス表示は妨げない。
     let device = null;
