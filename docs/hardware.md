@@ -629,6 +629,20 @@ PlatformIO の `esp32-s3-devkitc-1` は **N8（8MB・PSRAM無し）**の定義�
 `platformio.ini` で 16MB を明示している。**教えないとパーティション表が 8MB のまま作られ、
 後半 8MB が死ぬ**（黙って死ぬので気づきにくい）。
 
+**3. USB-Cポートが2つあり、片方は避けろ。** 現物は`USB`(ネイティブ`USB-Serial/JTAG`、
+S3チップ直結)と`UART`(CP2102/CH340系ブリッジチップ経由)の2ポートを持つDevKitC-1系の
+定番構成。**書き込みはどちらのポートからでも通る**(`pio run -t upload`は両方成功する)
+ため気づきにくいが、**シリアルモニタ用途は`UART`側を使え。**
+ネイティブ`USB-Serial/JTAG`側は、DTR/RTSによる自動リセットの制御ラインの意味付けが
+古典的なUSB-UARTブリッジ前提のツール(esptoolの`ClassicReset`/`HardReset`はおろか、
+`ESP32S3ROM.hard_reset()`の実装自体にも`uses_usb_otg`を渡すべきところ`uses_usb_otg`
+(常にFalse)を渡してしまうバグがある)と噛み合わず、**ソフトウェアからのリセットが
+ことごとくダウンロードモード(ブートローダ待機)に落ちて抜け出せなくなることがある**
+（2026-08-15、物理リセットボタンを押しても同じ症状が再現し、原因究明に長時間かかった。
+→ [log/2026-08-15-phase2-pps-first-lock.md](log/2026-08-15-phase2-pps-first-lock.md)）。
+**`UART`側のポート(`/dev/cu.usbmodemXXXXXXXX`のうち、`system_profiler SPUSBDataType`や
+Finderで"USB-Serial"系デバイスとして識別できる方)を使えば、この問題は最初から起きない。**
+
 ### SCKI は ESP32 の MCLK から出す。缶発振器を外付けしない
 
 発注した PCM1808 モジュールは**缶発振器なし版**なので、SCKI は ESP32 の MCLK から供給する。
