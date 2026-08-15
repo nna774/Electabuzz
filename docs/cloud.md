@@ -88,6 +88,13 @@ GFRQのバッチは30秒に1本しか増えないので、これは鮮度を犠�
 `fs_measured_hz`・`tb_residual_ns`等の品質を載せており、ダッシュボードの
 「今の状態」表示と生存確認を兼ねる。
 
+**`v_rms_mv`(トランス二次側の実効値[mV])も各点に`t_us`と並行な配列で返す**
+(2026-08-15)。`_series_payload()`はどのみち全レコードを舐めているので、
+追加のS3アクセスやパース費用は無い。`freq_hz`と違い隣接点間の差分に依存しない
+レコード単体の瞬時値なので、`session_id`変化やDISCONTINUITYによる抑制は
+適用しない——値が存在する限りそのまま返す。壁側(商用100V系)への換算は
+このAPIの責務ではない(→ [wire-format.md](wire-format.md)「`v_rms_mv`の基準点」)。
+
 瞬時周波数は`Record.cycles`(絶対累積位相)の隣接差分から`lambda/api/handler.py`の
 `_series_payload()`が計算する(バッチの読み込み自体は`lambda/store_gridfreq.py`)。
 **以下のいずれかに該当する隣接点はfreqを計算しない(null=系列の

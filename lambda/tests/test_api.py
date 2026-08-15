@@ -96,6 +96,23 @@ def test_steady_50hz_within_one_batch(h):
     assert body["freq_hz"][2] == pytest.approx(50.0)
     assert body["latest"]["freq_hz"] == pytest.approx(50.0)
     assert body["latest"]["timebase_source"] == "NOMINAL"
+    assert body["v_rms_mv"] == [10_500, 10_500, 10_500]  # freqと違い1件目も欠けない
+    assert body["latest"]["v_rms_mv"] == 10_500
+
+
+def test_v_rms_mv_survives_discontinuity_flag(h):
+    # v_rms_mvはレコード単体の瞬時値で、freq_hzのような隣接点間の差分計算に
+    # 依存しない。DISCONTINUITYでfreqがNone落ちしても値は抑制しない。
+    recs = [(cycles(50.0, 0), 8_500, 0), (cycles(50.0, 1), 8_520, 0),
+            (cycles(50.0, 2), 8_490, 0)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs,
+         flags=1 << 2)  # GfrqFlagDiscontinuity
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert all(f is None for f in body["freq_hz"])
+    assert body["v_rms_mv"] == [8_500, 8_520, 8_490]
 
 
 def test_frequency_continues_across_batch_boundary(h):
