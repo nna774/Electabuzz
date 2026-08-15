@@ -46,6 +46,14 @@ aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '/*'
 CloudFront側の`aws_cloudfront_response_headers_policy`が付与する。詳細は
 Namazuの`terraform/dashboard.tf`のコメントを参照——同じ構成を踏襲した）。
 
+**上のコマンドに`--delete`を足すな。** このバケットはOTA配信物
+(`ota/record/<version>.bin`・`.sha256`、→ [../docs/ota.md](../docs/ota.md)
+6章)と相乗りしている。`aws s3 sync . "s3://$BUCKET/" --delete`はローカルの
+`dashboard/`に存在しない`ota/`以下を丸ごと削除対象と見なし、配信中の
+ファーム一式を消す。実際に2026-08-15、ダッシュボードデプロイ作業中に
+誤って`--delete`を付けて実行し、`ota/record/`配下を全滅させる事故が
+起きた（幸い当時使い捨てて良い旧ビルドのみだったため実害なし）。
+
 ## ローカル確認
 
 ```bash

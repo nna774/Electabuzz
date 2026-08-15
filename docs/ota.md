@@ -185,6 +185,12 @@ Namazuの`esp32dev`/`adxl355`のようなenv振り分けは要らない）。
 `tools/publish_ota.sh`でビルド〜アップロードまで行う（作業ツリーが
 汚れていたら既定で拒否、`--allow-dirty`で強制可）。
 
+**ダッシュボードデプロイの`aws s3 sync`に`--delete`を付けるな。**
+同じバケットに`ota/`が同居しているため、`--delete`はローカルの
+`dashboard/`に存在しない`ota/`以下を削除対象と見なし、配信中のファーム
+一式を巻き込んで消す(→ [../dashboard/README.md](../dashboard/README.md)
+「デプロイ」節、2026-08-15に実際に事故った)。
+
 ## 7. ダウンロード: HTTPUpdate + TLS検証はルートCA埋め込み
 
 Arduino-ESP32の`HTTPUpdate`(`httpUpdate.update(client, url)`。内部は
