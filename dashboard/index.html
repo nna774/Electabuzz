@@ -66,6 +66,11 @@
       <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
       がその区間へ遡って重なる。</p>
 
+    <canvas id="vrms-canvas"></canvas>
+    <p class="muted">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの。壁側電圧への
+      概算換算は下の品質テーブルでopt-in表示)。線が途切れている区間は<code>v_rms_mv</code>未対応の
+      ファーム時代のレコード(常に0)であることを示す。</p>
+
     <table id="quality-table">
       <tbody></tbody>
     </table>
