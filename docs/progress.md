@@ -5,6 +5,7 @@
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-15 | **`CFG-TP5`/`CFG-NAV5`をUBX pollで読み返すツール(`tools/gnss_cfg_query.py`)を書いた。** u-centerで焼いた設定(fix喪失時もTIMEPULSE継続・定置モード)が実際にEEPROMへ反映されているかを、GUIの目視確認ではなくreceiverへの直接pollで機械可読に確認できるようにした。既存の`parse_gnss_log.py`のフレーム同定ロジックを再利用。合成payloadでbuild/parse往復を確認済み、実機テストはまだ | [log/2026-08-15-gnss-cfg-query-tool.md](log/2026-08-15-gnss-cfg-query-tool.md) |
 | 2026-08-15 | **段階1を正式にクローズした: NEO-M8T不要、航法用受信機(NEO-M8N)で足りると確定。** 屋外・窓ガラス貼り付け・向き検証・夜通し2セッションを跨いだ通算約44時間+αのログで、numSVは常に4機の判定基準を大きく上回り(最低5機)、無fixは実質1件のみだった。ユーザーが最終承認。`gnss.md`に判定結果を追記、`open-questions.md`から解決済み項目を整理。**次はフェーズ2(PPS同時サンプリング、方式A)に着手する**——firmware側(`PpsTimebase`/`PpsEdgeDetector`/`GnssNmea`)は実装・main.cpp統合済みで、残るは実配線と閾値較正 | [log/2026-08-15-stage1-close-m8t-not-needed.md](log/2026-08-15-stage1-close-m8t-not-needed.md) |
 | 2026-08-15 | **デスクトップPCでの継続録画(約23時間48分)を解析し、fix喪失ほぼゼロを再確認した。** Mac側20時間半からの続きで、通算約44時間・約129,500サンプルを窓ガラス貼り付けのまま記録。今回はquality=0がGGA85,700件中1件のみ、numSV最低5機・平均11.10機。「NEO-M8T不要、航法用受信機で足りる」という段階1の判断を裏付ける材料がさらに積み上がった。**段階1の正式クローズはユーザー判断待ちのまま** | [log/2026-08-15-desktop-continuation-24h-capture.md](log/2026-08-15-desktop-continuation-24h-capture.md) |
 | 2026-08-15 | **GNSS UARTの候補ピンをGPIO1/2からGPIO13/14に変更した。** 実配線の取り回しの都合による変更で、除外リストのどれにも当たらないことを確認済み。GPIO46はストラップ対象かつS3では入力専用なので候補から外した。`config.h`・`docs/hardware.md`を更新し、`env:record`ビルドSUCCESSを確認。実配線・実測はまだ | [log/2026-08-15-gnss-uart-gpio-change-13-14.md](log/2026-08-15-gnss-uart-gpio-change-13-14.md) |
