@@ -44,3 +44,7 @@ soak/
 
 # worktree（別セッションが作る作業用クローン。レポには入れない）
 .claude/worktrees/
+
+# 解析時のS3生バッチキャッシュ（→ tools/README.md）。再取得を避けるための
+# 再利用資産だが、リポジトリには入れない
+.s3cache/
