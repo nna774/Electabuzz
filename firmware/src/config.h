@@ -125,8 +125,8 @@ static constexpr int kLedPpsLockPin = 8;  // 緑LED前提。gPps.source()==kPps(
 //
 // **`env:record`のGoertzel/gFs用ピン(15-18)・LED用ピン(4-8)・WS2812(48)・
 // 除外リスト(33-37/26-32/43-44/19-20/0-3-45-46)のいずれにも当たらない未使用GPIO。**
-static constexpr int kGnssUartRxPin = 2;         // GPIO2(ESP32 RX)← GNSSモジュールのTXD
-static constexpr int kGnssUartTxPin = 1;         // GPIO1(ESP32 TX)→ GNSSモジュールのRXD
+static constexpr int kGnssUartRxPin = 14;        // GPIO14(ESP32 RX)← GNSSモジュールのTXD
+static constexpr int kGnssUartTxPin = 13;        // GPIO13(ESP32 TX)→ GNSSモジュールのRXD
 static constexpr uint32_t kGnssUartBaud = 9600;  // u-bloxの既定ボーレート
 
 // --- PPSエッジ検出(R ch)。→ firmware/lib/PpsEdge/ ---
