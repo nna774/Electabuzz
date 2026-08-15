@@ -45,6 +45,15 @@
 
 ## 次に何が可能になったか
 
-`terraform apply`を実施すればdataバケットの`series/`が誤削除から守られる。
-適用後は`aws s3api get-bucket-versioning`・バケットポリシーの実値確認が要る
-(NamazuのPR #85と同じ確認手順)。`bad/`の扱いは別途検討が必要。
+`terraform apply`を実施すればdataバケットの`series/`・`bad/`が誤削除から
+守られる。適用後は`aws s3api get-bucket-versioning`・バケットポリシーの
+実値確認が要る(NamazuのPR #85と同じ確認手順)。
+
+## 追記: `bad/`も対象に加えた
+
+上記で「別途判断が要る」としていた`bad/`(CRC不一致の隔離)について、
+ユーザーから「入れとこう」と指示があり、同じDenyポリシーの対象に加えた。
+`bad/`も`series/`と同じく「捨てると証拠が消える」再生成不可のデータ
+(→ docs/cloud.md)なので、除外する理由が無いという判断。バケット
+ポリシーの`resources`に`${aws_s3_bucket.data.arn}/bad/*`を追加しただけで、
+バージョニングは元々バケット全体に効いているため変更不要。

@@ -65,19 +65,21 @@ f(t)  = d(cycles)/dt                   … 周波数は任意窓で後から再�
 生波形の常時保存は価値が低い。既存のイベント切り出し思想を踏襲し、
 **立ち上げ検証期間だけ `raw/` を有効化**して波形を眺めるのが賢い使い方。
 
-### `series/` の誤削除防止
+### `series/`・`bad/` の誤削除防止
 
-`series/` は再生成不可の唯一の原本なので、IAM層とは別に誤削除を止める必要が
-ある——実行者本人のAWS認証情報はLambda IAMロールの制限を受けず、直接AWS
-CLI/コンソールから`DeleteObject`できてしまうため。dataバケット([s3.tf](../terraform/s3.tf))に
-バージョニングを有効化し、`series/*`への`s3:DeleteObject`/`s3:DeleteObjectVersion`
+`series/` は再生成不可の唯一の原本、`bad/` はCRC不一致の隔離(捨てると
+証拠が消える→docs/cloud.md)で、どちらも再生成不可という点で同じ扱いが
+要る。IAM層とは別に誤削除を止める必要がある——実行者本人のAWS認証情報は
+Lambda IAMロールの制限を受けず、直接AWS CLI/コンソールから`DeleteObject`
+できてしまうため。dataバケット([s3.tf](../terraform/s3.tf))にバージョニングを
+有効化し、`series/*`・`bad/*`への`s3:DeleteObject`/`s3:DeleteObjectVersion`
 をDenyするバケットポリシーを追加した。NamazuHaUrokoGaNaiの`events/`誤削除防止
 ([PR #85](https://github.com/nna774/NamazuHaUrokoGaNai/pull/85))と同じ構成。
 
 Namazu側では「S3 Lifecycle expirationはバケットポリシーのDenyを迂回する」
 既知の穴があったが、dataバケットにはまだlifecycle ruleが無いため
 (冒頭のコメント参照)、Electabuzzでは今のところこの穴は該当しない。将来
-`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`を
+`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・`bad/`を
 巻き込まないことを確認すること。
 
 ---

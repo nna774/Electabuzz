@@ -15,7 +15,8 @@ resource "aws_s3_bucket_public_access_block" "data" {
   restrict_public_buckets = true
 }
 
-# series/(累積位相の唯一の原本、再生成不可)をIAM層とは別の層で誤削除から守る。
+# series/(累積位相の唯一の原本)・bad/(CRC不一致の隔離、捨てると証拠が消える
+# →docs/cloud.md)をIAM層とは別の層で誤削除から守る。どちらも再生成不可。
 # 実行者本人のAWS認証情報はLambda IAMロールの制限を受けないため、直接AWS
 # CLI/コンソールから誤ってDeleteObjectされる事故をここで止める。
 # NamazuHaUrokoGaNaiのevents/誤削除防止(PR #85)と同じ構成。
@@ -28,13 +29,16 @@ resource "aws_s3_bucket_versioning" "data" {
 
 data "aws_iam_policy_document" "data_bucket_protect_series" {
   statement {
-    sid    = "DenyDeleteSeries"
+    sid    = "DenyDeleteSeriesAndBad"
     effect = "Deny"
     actions = [
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
     ]
-    resources = ["${aws_s3_bucket.data.arn}/series/*"]
+    resources = [
+      "${aws_s3_bucket.data.arn}/series/*",
+      "${aws_s3_bucket.data.arn}/bad/*",
+    ]
     principals {
       type        = "AWS"
       identifiers = ["*"]
