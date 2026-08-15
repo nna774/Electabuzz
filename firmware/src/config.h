@@ -148,7 +148,6 @@ static constexpr uint64_t kPpsEdgeRefractorySamples = kFsNominalHz / 2;
 //
 // ここの定数は`fs`と違って実測で追い続けている量ではなく、固定の回路設計値
 // (R1/R2)とデータシート値・実測1点(VCC)から逆算するだけの**近似**。
-// 用途(電圧異常・停電判定の閾値判定)には十分だが、絶対確度を主張しない。
 static constexpr double kAfeR1Ohms = 100000.0;                    // docs/hardware.md
 static constexpr double kAfeR2Ohms = 6800.0;                      // docs/hardware.md
 static constexpr double kAdcInputImpedanceOhms = 60000.0;         // PCM1808 datasheet typ.
@@ -163,3 +162,14 @@ static constexpr double kAdcVccVolts = 4.84;
 // PCM1808は24bit符号付き。i2s_readは32bit枠にMSB詰めで来るのを>>8で戻すので
 // フルスケール振幅は2^23(main.cppのpumpI2s()参照)。
 static constexpr double kAdcFullScaleCode = 8388608.0;  // 2^23
+
+// R1/R2/VCCの理論値だけで組んだ上の換算式は、実測(DMM)と比べると系統的に低く出る
+// ことが分かった(2026-08-15)。同時刻帯のDMM二次側実測10.21V(壁側102.8〜102.9V、
+// PR #45)に対し、同じ時間帯のfirmware生値(理論式のまま)は約8480mVで、比にして
+// 約1.204倍の食い違いがある。R1/R2は公称品番であって個体の実測値ではなく、
+// ADC入力インピーダンスもデータシートのtyp.値でしかないため、どの定数が
+// ずれているかは特定していない——**理論式の内訳を疑うより、実測との比を
+// そのまま補正係数として掛ける方が正直**という判断で単一の経験係数にした。
+// 導出: docs/log/2026-08-15-afe-empirical-calibration.md。
+// **1点校正でしかない。** 複数回・複数条件(負荷変動・気温)での再検証はこれから。
+static constexpr double kAfeEmpiricalCalFactor = 1.204;

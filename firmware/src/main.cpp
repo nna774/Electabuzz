@@ -156,7 +156,10 @@ uint16_t computeVRmsMv(double magnitude, size_t windowSamples) {
   const double nodeAPeakVolts = (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts);
   // AFE分圧(ADC入力インピーダンスの負荷込み)を逆算してトランス二次側へ戻す。
   const double secondaryPeakVolts = nodeAPeakVolts / kAfeDividerRatio;
-  const double secondaryRmsMv = (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0;
+  // 理論式のままだと実測(DMM)より系統的に低く出るため、経験係数で補正する
+  // (→ kAfeEmpiricalCalFactor のコメント、docs/log/2026-08-15-afe-empirical-calibration.md)。
+  const double secondaryRmsMv =
+      (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0 * kAfeEmpiricalCalFactor;
   if (secondaryRmsMv <= 0.0) return 0;
   if (secondaryRmsMv >= 65535.0) return 65535;
   return static_cast<uint16_t>(secondaryRmsMv + 0.5);
