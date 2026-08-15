@@ -152,9 +152,15 @@ uint16_t computeVRmsMv(double magnitude, size_t windowSamples) {
   // (firmware/lib/Goertzel/test/test_goertzel.cpp で検証済み)。
   const double ampCode = 2.0 * magnitude / static_cast<double>(windowSamples);
   // フルスケール(コード = 2^23)が 0.3×VCC[V]（データシートの 0.6×VCC Vpp の半分）
-  // に対応する。
-  const double nodeAPeakVolts = (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts);
+  // に対応する……という理論式だけだと実測(DMM)より系統的に低く出ると分かった
+  // ため、経験係数で補正する。node A(分圧後)をDMMで直接実測して分圧網は
+  // 無罪と確定させた上で、ここ(ADCコード→node A電圧)に局在すると特定した
+  // (→ kAdcAmplitudeCalFactor のコメント、
+  // docs/log/2026-08-15-afe-empirical-calibration.md)。
+  const double nodeAPeakVolts =
+      (ampCode / kAdcFullScaleCode) * (0.3 * kAdcVccVolts) * kAdcAmplitudeCalFactor;
   // AFE分圧(ADC入力インピーダンスの負荷込み)を逆算してトランス二次側へ戻す。
+  // こちらは理論値のまま(実測との比は1.8%——抵抗の公称誤差の範囲)。
   const double secondaryPeakVolts = nodeAPeakVolts / kAfeDividerRatio;
   const double secondaryRmsMv = (secondaryPeakVolts / std::sqrt(2.0)) * 1000.0;
   if (secondaryRmsMv <= 0.0) return 0;
