@@ -35,8 +35,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <vector>
 
+#include "AcInputMonitor.h"
 #include "DeviceIdentity.h"
+#include "FaultNotifier.h"
 #include "Goertzel.h"
 #include "GridFreqWire.h"
 #include "LedStatus.h"
@@ -421,6 +424,32 @@ double gFNominalHz = 0.0;  // 0 = 未判別
 Uploader* gUploader = nullptr;
 Batch* gCurrentBatch = nullptr;
 bool gBatchDiscontinuity = false;
+// このバッチの区間でAC入力断(gAcInputMonitor.faulted())を一度でも観測したか。
+// gBatchDiscontinuityと同じラッチパターン——バッチ確定時にkGfrqFlagPowerFailへ
+// 変換してリセットする。
+bool gBatchPowerFail = false;
+
+// AC入力(トランス→AFE)が見えているかの監視。→ firmware/lib/AcInputMonitor/、
+// 閾値・継続window数の根拠は config.h のコメント。
+acinput::AcInputMonitor gAcInputMonitor(kAcFaultVRmsThresholdMv, kAcFaultSustainWindows);
+
+// GPIO出力で状態を示す最小のFaultNotifier実装。ハードウェア依存(digitalWrite)なので
+// main.cpp側に置く(→ FaultNotifier.hのコメント)。
+class LedFaultNotifier : public fault::FaultNotifier {
+ public:
+  explicit LedFaultNotifier(int pin) : pin_(pin) {}
+  void notify(bool faulted) override { digitalWrite(pin_, faulted ? HIGH : LOW); }
+
+ private:
+  int pin_;
+};
+
+LedFaultNotifier gAcFaultLed(kLedAcFaultPin);
+// **通知先を増やす拡張点。** 今はLEDのみだが、将来ローカルな通知(ブザー等)を
+// 足すならここにpush_backするだけでよい。**Slack等の外部通知はここに足さない**
+// ——FaultNotifier.hのコメントの通り、クラウド側watchdog Lambda(フェーズ9)の
+// 役割にする設計判断のため。
+std::vector<fault::FaultNotifier*> gFaultNotifiers = {&gAcFaultLed};
 // 前回ループ時点でgFs.source()がNTPだったか。NOMINAL→NTPへの遷移だけを
 // エッジ検出してGoertzelを作り直すために使う。tick逆行によるgFs.reset()で
 // 理論上NOMINALへ戻ることがあるが、その場合は素直にfalseへ戻り、
@@ -573,11 +602,13 @@ void setup() {
   pinMode(kLedSpillBacklogPin, OUTPUT);
   pinMode(kLedFastSlowPin, OUTPUT);
   pinMode(kLedPpsLockPin, OUTPUT);
+  pinMode(kLedAcFaultPin, OUTPUT);
   digitalWrite(kLedWifiPin, HIGH);  // WiFi接続が確立するまでは「切断中」を表す点灯
   digitalWrite(kLedTimebaseLockPin, LOW);
   digitalWrite(kLedSpillBacklogPin, LOW);
   digitalWrite(kLedFastSlowPin, LOW);
   digitalWrite(kLedPpsLockPin, LOW);
+  digitalWrite(kLedAcFaultPin, LOW);  // 起動直後は未判定。最初の窓が確定するまで消灯のまま
 
   // GNSS UART。CFG-TP5/CFG-NAV5はu-centerで一度EEPROMへ焼く前提なので、
   // firmwareからは読むだけ(→ docs/log/2026-08-12-gnss-pps-wiring-plan.md)。
@@ -790,6 +821,18 @@ void loop() {
       }
     }
 
+    // AC入力断の監視。**測定・送信の経路(cyclesQ16/addRecord)には一切影響しない**
+    // ——rec.vRmsMvを読むだけの副作用で、上のWS2812/fast-slow LED更新と同じ位置に置く。
+    if (gAcInputMonitor.update(rec.vRmsMv)) {
+      const bool faulted = gAcInputMonitor.faulted();
+      Serial.printf("# ac input %s (v_rms_mv=%u)\n", faulted ? "fault" : "restored",
+                    rec.vRmsMv);
+      for (fault::FaultNotifier* n : gFaultNotifiers) n->notify(faulted);
+    }
+    // このバッチの区間で一度でもfaultedだったかをラッチする。gBatchDiscontinuityと
+    // 同じパターン——バッチ確定時にkGfrqFlagPowerFailへ変換してリセットする(下記)。
+    if (gAcInputMonitor.faulted()) gBatchPowerFail = true;
+
     if (gCurrentBatch == nullptr) {
       gCurrentBatch = gridfreq::newBatch();
       // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
@@ -857,7 +900,8 @@ void loop() {
       hf.timebase_source = ppsUsable ? (ntpUsable ? kGfrqTbPpsNtp : kGfrqTbPps)
                                       : (ntpUsable ? kGfrqTbNtp : kGfrqTbNominal);
       hf.flags = (gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0) |
-                 (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0);
+                 (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0) |
+                 (gBatchPowerFail ? kGfrqFlagPowerFail : 0);
       hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
       gridfreq::fillHeader(*gCurrentBatch, hf);
 
@@ -867,6 +911,7 @@ void loop() {
       gUploader->enqueue(gCurrentBatch);
       gCurrentBatch = nullptr;
       gBatchDiscontinuity = false;
+      gBatchPowerFail = false;
     }
   }
 

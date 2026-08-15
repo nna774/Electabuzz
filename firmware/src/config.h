@@ -121,9 +121,15 @@ static constexpr int kLedWifiPin = 7;            // 赤LED前提。切断中(HIG
 // 要るのはロック状態を示す表示用の1本だけ。他用途に転用しないこと。
 static constexpr int kLedPpsLockPin = 8;  // 緑LED前提。gPps.source()==kPps(HIGH)/未ロック(LOW)
 
+// GPIO9は4〜8の続きの列にあり配線しやすい未使用GPIO。AC入力断検知
+// (→ firmware/lib/AcInputMonitor/)の通知用に割り当てた(2026-08-15)。
+// 他のLEDと同じ「1本=1つの独立した二値状態」方針を踏襲する
+// (→ docs/log/2026-08-09-led-status-feature.md)。他用途に転用しないこと。
+static constexpr int kLedAcFaultPin = 9;  // 赤LED前提。AC入力が見えない(HIGH)/正常(LOW)
+
 // --- GNSS UART (→ docs/hardware.md「GNSS(NEO-M8N) 配線」節。設計案・実配線はまだ) ---
 //
-// **`env:record`のGoertzel/gFs用ピン(15-18)・LED用ピン(4-8)・WS2812(48)・
+// **`env:record`のGoertzel/gFs用ピン(15-18)・LED用ピン(4-9)・WS2812(48)・
 // 除外リスト(33-37/26-32/43-44/19-20/0-3-45-46)のいずれにも当たらない未使用GPIO。**
 static constexpr int kGnssUartRxPin = 14;        // GPIO14(ESP32 RX)← GNSSモジュールのTXD
 static constexpr int kGnssUartTxPin = 13;        // GPIO13(ESP32 TX)→ GNSSモジュールのRXD
@@ -182,3 +188,21 @@ static constexpr double kAdcFullScaleCode = 8388608.0;  // 2^23
 // 経験係数として掛ける。導出: docs/log/2026-08-15-afe-empirical-calibration.md。
 // **1点校正でしかない。** 複数回・複数条件(負荷変動・気温)での再検証はこれから。
 static constexpr double kAdcAmplitudeCalFactor = 1.182;
+
+// --- AC入力断検知(→ firmware/lib/AcInputMonitor/、docs/log/2026-08-12-afe-input-disconnect-detection.md) ---
+//
+// v_rms_mv(上記の換算式による、トランス二次側の実効値[mV])を毎窓(≈1秒)監視し、
+// しきい値未満がkAcFaultSustainWindows回連続したら「AC入力が見えない」と判定する。
+//
+// **どちらも実機の断線イベントで検証していない未校正のプレースホルダである**
+// (kPpsEdgeThresholdと同じ立て付け)。正常時のv_rms_mvは実測で8000〜10000mV程度
+// (→ 上記kAdcAmplitudeCalFactorのコメント、docs/hardware.md「電源」節)。
+// 断線時は回路解析上「振幅ゼロに静止する」見込みだが、実機でどこまで下がりきる
+// (AFEのノイズフロア込み)かはまだ記録が無い。次に実機で断線を再現できたら
+// 実測のv_rms_mv低下量で見直すこと。
+static constexpr uint16_t kAcFaultVRmsThresholdMv = 1000;
+// Goertzel窓は約1秒(main.cppの `gRecordGoertzel` 構築時の `windowSec=1.0` 参照)なので、
+// 3windowsは「数周期〜数秒オーダー」というdocs/log記載の下限寄り。単発の谷(瞬時の
+// 負荷変動等)でチャタリングしない範囲で、実際の断線検知が数秒以内に反応するように、
+// という両立点として選んだ初期値。
+static constexpr uint32_t kAcFaultSustainWindows = 3;
