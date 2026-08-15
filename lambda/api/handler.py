@@ -150,6 +150,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
     freq_hz: list[float | None] = []
     freq_hz_corrected: list[float | None] = []
     timebase_source: list[str] = []
+    v_rms_mv: list[int] = []
     latest = None
 
     session_corrections = _session_fs_corrections(batches)
@@ -201,6 +202,9 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                 freq_hz.append(round(f, 6) if f is not None else None)
                 freq_hz_corrected.append(round(f_corrected, 6) if f_corrected is not None else None)
                 timebase_source.append(h.source_name)
+                # r.v_rms_mv はレコード単体の瞬時値で、freq_hzのような隣接点間の
+                # 差分計算に依存しない。suspect/discontinuityで抑制する理由が無い。
+                v_rms_mv.append(r.v_rms_mv)
                 latest = {
                     "t_us": t,
                     "freq_hz": round(f, 6) if f is not None else None,
@@ -213,6 +217,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                     "soc_temp_c": h.soc_temp_c,
                     "session_id": h.session_id,
                     "device_id": h.device_id,
+                    "v_rms_mv": r.v_rms_mv,
                 }
 
             if not suspect:
@@ -223,5 +228,5 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
     return {
         "start_us": start_us, "end_us": end_us, "n": len(t_us),
         "t_us": t_us, "freq_hz": freq_hz, "freq_hz_corrected": freq_hz_corrected,
-        "timebase_source": timebase_source, "latest": latest,
+        "timebase_source": timebase_source, "v_rms_mv": v_rms_mv, "latest": latest,
     }
