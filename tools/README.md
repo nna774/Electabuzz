@@ -2,14 +2,15 @@
 
 実機・クラウドの運用や解析に使うスクリプト置き場。
 
-## 何度も条件を変えて解析するときのS3キャッシュ
+## S3の`series/`を取ってくる時のキャッシュ
 
-`v_rms_mv` のように新しく流れ始めたフィールドの実データを見る、閾値や集計窓を
-変えながら何度も試したくなる解析をするときは、`series/` の生バッチをリポジトリ
-直下の `.s3cache/`（gitignore対象）にキャッシュしてから使うこと。S3取得自体は
-安い（30秒バッチ単位の`get_object`数千回・数十MBで数円以下）が、同じバッチを
-何度も取り直すのは無駄で遅い。[NamazuHaUrokoGaNai](https://github.com/nna774/NamazuHaUrokoGaNai)
-の `tools/README.md` と同じ設計。
+**S3の`series/`から生バッチを取ってくるスクリプトを書く時は、リポジトリ直下の
+`.s3cache/`（gitignore対象）にキャッシュを置け。** 一回きりのつもりの取得でも
+例外にしない——「今回は使い捨て」のつもりで書いたスクリプトほど、後から
+閾値や集計窓を変えて何度も掘り返すことになる。S3取得自体は安い（30秒バッチ単位の
+`get_object`数千回・数十MBで数円以下）が、同じバッチを何度も取り直すのは無駄で
+遅い。[NamazuHaUrokoGaNai](https://github.com/nna774/NamazuHaUrokoGaNai)の
+`tools/README.md` と同じ設計。
 
 - **object keyをそのままローカルパスにミラーする**（`.s3cache/series/2026/08/15/03/0001-<startus>.bin`
   のように、`lambda/s3keys.py` の `series_key()` が返すキーをそのまま `.s3cache/`
