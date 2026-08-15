@@ -151,6 +151,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
     freq_hz_corrected: list[float | None] = []
     timebase_source: list[str] = []
     v_rms_mv: list[int] = []
+    continuous: list[bool] = []
     latest = None
 
     session_corrections = _session_fs_corrections(batches)
@@ -164,6 +165,14 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
     prev_session = None
     prev_t = None
     prev_cycles = None
+
+    # v_rms_mv等、差分計算に依存しない量が「直前の点と線をつないでよいか」を
+    # 判定するための、上とは別の「直前の点」。suspect(DISCONTINUITY)では
+    # リセットしない——v_rms_mvの値自体は瞬時値で、隣接レコード間隔の乱れとは
+    # 無関係だから抑制する理由が無い(→ test_v_rms_mv_survives_discontinuity_flag)。
+    # 判定基準はセッション変化・実測dtが想定間隔から大きく外れることだけに絞る。
+    prev_session_any = None
+    prev_t_any = None
 
     for b in batches:
         h = b.header
@@ -197,6 +206,12 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
             f_corrected = (f * correction if f is not None and is_nominal_source
                            and correction is not None else None)
 
+            # 「直前の点」がまだ生きていて(=同一セッション)、実測dtが想定間隔の
+            # 2倍以内に収まっているかどうか。suspectは見ない(上のコメント参照)。
+            is_continuous = (nominal_dt is not None and prev_t_any is not None
+                              and prev_session_any == h.session_id
+                              and (t - prev_t_any) / 1e6 <= 2.0 * nominal_dt)
+
             if in_range:
                 t_us.append(t)
                 freq_hz.append(round(f, 6) if f is not None else None)
@@ -205,6 +220,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                 # r.v_rms_mv はレコード単体の瞬時値で、freq_hzのような隣接点間の
                 # 差分計算に依存しない。suspect/discontinuityで抑制する理由が無い。
                 v_rms_mv.append(r.v_rms_mv)
+                continuous.append(is_continuous)
                 latest = {
                     "t_us": t,
                     "freq_hz": round(f, 6) if f is not None else None,
@@ -224,9 +240,11 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                 prev_session, prev_t, prev_cycles = h.session_id, t, r.cycles
             else:
                 prev_session, prev_t, prev_cycles = None, None, None
+            prev_session_any, prev_t_any = h.session_id, t
 
     return {
         "start_us": start_us, "end_us": end_us, "n": len(t_us),
         "t_us": t_us, "freq_hz": freq_hz, "freq_hz_corrected": freq_hz_corrected,
-        "timebase_source": timebase_source, "v_rms_mv": v_rms_mv, "latest": latest,
+        "timebase_source": timebase_source, "v_rms_mv": v_rms_mv,
+        "continuous": continuous, "latest": latest,
     }
