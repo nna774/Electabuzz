@@ -555,9 +555,16 @@ ESP32-S3 + GNSS で 1W 程度なので 10000mAh で数十時間。
 > `firmware/src/config.h`の`kAdcAmplitudeCalFactor`(=1.182)としてそこに
 > 経験係数を追加した(→
 > [log/2026-08-15-afe-empirical-calibration.md](log/2026-08-15-afe-empirical-calibration.md))。
-> **局在は特定できたが、フルスケール解釈自体の最終確認(データシート再読 or
-> オシロでの波形直接確認)はまだ済んでいない。** 複数回・複数条件での
-> 再検証もこれから——
+> **局在は特定できたが、原因はまだ分かっていない。** TI公式データシート
+> (SLES177B)を読み直したところ、"Analog input voltage, full scale (–0 dB),
+> VCC=5V = 3 Vp-p"(§6.3)と"Input voltage = 0.6 VCC Vp-p"(§6.5)は同一の
+> full scale(0dBFS)を指すと明記されており、**headroomを見込んだ公称値では
+> なくfirmwareの理論式の解釈通り**だった——「フルスケール解釈のズレ」という
+> 仮説はデータシートでは裏付けられず、むしろ棄却された(→
+> [log/2026-08-15-pcm1808-datasheet-check.md](log/2026-08-15-pcm1808-datasheet-check.md))。
+> 1.182倍のズレの正体はデータシートのレベルでは説明が付かず、残る手段は
+> オシロでnode Aの波形とADCコードを同時に見るか、I2Sのビット解釈自体
+> (`pumpI2s()`)を疑うことになる。複数回・複数条件での再検証もこれから——
 > 校正後の値と巻数比を掛け合わせた壁側電圧概算(ダッシュボード)も、
 > 土台のこの校正が1点である限り同じ留保が付く。
 

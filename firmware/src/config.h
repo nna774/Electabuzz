@@ -181,11 +181,21 @@ static constexpr double kAdcFullScaleCode = 8388608.0;  // 2^23
 //   3. Goertzelの振幅推定式(`ampCode = 2×magnitude/N`) — 合成正弦波で1%以内の
 //      一致を確認済み(firmware/lib/Goertzel/test/test_goertzel.cpp)。**無罪。**
 // 残る容疑は「フルスケールコード(2^23)が本当に0.6×VCCのVpp入力レンジに
-// 対応するか」という**データシートの解釈そのもの**だけになった——オーディオ
-// 用ADCでは0.6×VCCがheadroomを見込んだ公称値で、物理クリップ点はもっと外側、
-// というケースがありうる。オシロでの波形直接確認かデータシートの当該項目の
-// 読み直しをしないと最終確定はできないので、それまでは実測との比をそのまま
-// 経験係数として掛ける。導出: docs/log/2026-08-15-afe-empirical-calibration.md。
+// 対応するか」という**データシートの解釈そのもの**だと考え、TI公式データシート
+// (SLES177B)を読み直した(2026-08-15)。§6.3 Recommended Operating Conditionsに
+// "Analog input voltage, full scale (–0 dB), VCC=5V = 3 Vp-p"と明記されており、
+// §6.5 ANALOG INPUTの"Input voltage = 0.6 VCC Vp-p"と同一の値・同一のfull scale
+// (0dBFS)を指している——**headroomを見込んだ公称値ではなく、0.6×VCCがそのまま
+// 0dBFS(=デジタルコードのフルスケール)である**とデータシート上確定した。
+// つまりfirmwareの理論式の解釈は正しく、**この容疑も晴れてしまった**。
+// 唯一MIN/MAXの明記が無いのはInput impedance(60kΩ、TYPのみ)と、DC ACCURACYの
+// Gain error(TYP±3%・MAX±6% of FSR、それでも18%には遠く及ばない)——
+// データシートのレベルでは1.182倍のズレを説明できる記述が見つからなかった。
+// 残る手段はオシロでnode Aの波形とADCコードを同時に見る、または実装
+// (`pumpI2s()`のI2Sビットシフト・符号解釈)そのものを疑うことで、
+// どちらもこのセッションでは未着手。導出の全経緯:
+// docs/log/2026-08-15-afe-empirical-calibration.md、
+// docs/log/2026-08-15-pcm1808-datasheet-check.md。
 // **1点校正でしかない。** 複数回・複数条件(負荷変動・気温)での再検証はこれから。
 static constexpr double kAdcAmplitudeCalFactor = 1.182;
 
