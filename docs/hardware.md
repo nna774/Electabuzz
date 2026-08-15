@@ -481,16 +481,30 @@ ESP32-S3 + GNSS で 1W 程度なので 10000mAh で数十時間。
 > **AC入力断の検知方式は「v_rms低下」から変わっている(2026-08-12)。**
 > 実機でAC入力線がブレッドボードから抜ける事故を受けて回路解析したところ、
 > 現行AFE(C1実装後)では入力断時にnode AがR2経由で低インピーダンスにGNDへ
-> 落ちて振幅ゼロに静止する素直な壊れ方をすると判明。検知候補は**Goertzelビンの
-> エネルギーがしきい値未満で継続すること**（`GfrqRecord.flags`の空きビット割り当てが
-> 候補）。**そして「線が抜けた」と「停電した」はAFE単体の信号では原理的に
-> 区別できないと分かった**——UPS化後はESP32が電池で生き続けAFEだけが
-> 入力ゼロを見る状態になり、両者は同じ見え方になる。**方針は無理に区別せず
-> 「AC入力が見えない」で一本化、原因の切り分けは通知を受けた人間が現地で判断する**、
-> に決めた。しきい値・`flags`ビット割り当て・通知先はいずれも未実装。
-> なお`GfrqHeader.flags`には`kGfrqFlagPowerFail`(バッチ単位、粗い方の指標)が
-> 既に予約されているが、これも未配線のまま
+> 落ちて振幅ゼロに静止する素直な壊れ方をすると判明。検知は**`v_rms_mv`(=Goertzel
+> ビンのエネルギーから換算した値)がしきい値未満で継続すること**で行う。
+> **そして「線が抜けた」と「停電した」はAFE単体の信号では原理的に区別できないと
+> 分かった**——UPS化後はESP32が電池で生き続けAFEだけが入力ゼロを見る状態になり、
+> 両者は同じ見え方になる。**方針は無理に区別せず「AC入力が見えない」で一本化、
+> 原因の切り分けは通知を受けた人間が現地で判断する**、に決めた。
+>
+> **2026-08-15、検知ロジック・LED通知・`flags`配線を実装した。**
+> `firmware/lib/AcInputMonitor/`(しきい値`kAcFaultVRmsThresholdMv=1000mV`未満が
+> `kAcFaultSustainWindows=3`window連続でfault確定、対称なヒステリシスで復帰も同数を
+> 要求)が判定し、`firmware/lib/FaultNotify/`の`FaultNotifier`インターフェース経由で
+> `LedFaultNotifier`(**GPIO9**、上記「オンボードLED・ボタン」節)へ通知する。
+> バッチ単位で`kGfrqFlagPowerFail`(`GfrqHeader.flags`のbit3、2026-08-12から予約
+> されていたが未配線だった)も実際に立つようになった。
+> **同日中にGPIO9への物理配線と実機でのAC入力線抜き差しによる動作確認まで完了した。**
+> 抜線で`v_rms_mv=8`まで落ち、`kGfrqFlagPowerFail`が立ちLEDが点灯、挿し直しで
+> 両方とも復帰することを確認した(→ [docs/log/2026-08-15-ac-input-disconnect-detection-impl.md](log/2026-08-15-ac-input-disconnect-detection-impl.md)
+> 「実機確認」節)。**ただし検証できたのは完全な抜線という極端なケースのみで、
+> しきい値・継続window数が境界付近の緩やかな電圧低下でも妥当かは未検証のまま。**
+> **Slack等の外部通知はfirmwareから
+> 直接叩かず**、地震計(NamazuHaUrokoGaNai)の生存台帳+watchdog Lambdaと同じ役割分担で
+> クラウド側(フェーズ9、未着手)に委ねる設計とした
 > （→ [docs/log/2026-08-12-afe-input-disconnect-detection.md](log/2026-08-12-afe-input-disconnect-detection.md)、
+> [docs/log/2026-08-15-ac-input-disconnect-detection-impl.md](log/2026-08-15-ac-input-disconnect-detection-impl.md)、
 > [open-questions.md](open-questions.md)「AC入力線の入力断検知・物理固定」）
 
 > **「小型UPSを挟む」の具体案(検討中、未確定): 電源マルチプレクサIC(TPS2113A系)で
@@ -772,6 +786,11 @@ WS2812(GPIO48)と外付けLED4本を使ったステータス表示を実装し�
   4/5/6/7と同じ列の続きにあり配線しやすい。PPS信号自体は既存I2SのRチャンネルに
   載る設計なので新規GPIOは不要——要るのはロック状態を示す表示用の1本だけ。
   他用途に転用しないこと。
+- **GPIO9はAC入力断検知の通知用（2026-08-15実装・同日中に実機配線確認済み）。**
+  同じ列の続き。赤LED前提で「AC入力が見えない」区間だけ点灯する
+  （`firmware/lib/AcInputMonitor/` + `firmware/lib/FaultNotify/`。実際にAC入力線を
+  抜き差しして点灯・消灯を確認済み。しきい値・継続window数の精密な校正は未検証のまま。
+  → 下記「電源」節）。
 
 ### GNSS(NEO-M8N) 配線 — フェーズ2着手前の設計案 (2026-08-12、未実装)
 
