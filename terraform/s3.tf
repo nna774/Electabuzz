@@ -35,6 +35,14 @@ resource "aws_s3_bucket_versioning" "data" {
 # 分だけ課金対象が増え続ける。current versionのexpireは掛けない(=保存方針は
 # 変えない)まま、noncurrent versionだけを掃除する。日数(30)はNamazuの
 # events/保護(PR #85)と揃えた暫定値——実際のretry頻度を見て確度を上げる。
+#
+# 【重要】このルールが消すのはnoncurrent versionだけで、下のDenyポリシーが
+# 効くcurrent versionには触れない——が、series/・bad/を誤って上書きした場合の
+# 「元のバージョンから復旧できる猶予」は、Denyポリシーの有無に関わらず
+# noncurrent_days(30日)で頭打ちになる。Lifecycle expirationはS3サービス
+# 内部の自動処理であり、特定のIAMプリンシパルによるリクエストとして発行
+# されるわけではないため、バケットポリシー/IAMポリシーの評価対象外
+# (AWSの既知の挙動、Namazu PR #85のs3.tfコメントと同じ話)。
 resource "aws_s3_bucket_lifecycle_configuration" "data" {
   bucket = aws_s3_bucket.data.id
 

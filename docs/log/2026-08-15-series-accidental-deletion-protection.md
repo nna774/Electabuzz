@@ -79,3 +79,23 @@ current versionのexpireとは別物として`noncurrent_version_expiration`
 「dataバケットにはlifecycle ruleが無い」という記述は、current version
 expireについては引き続き真だが、noncurrent version expireについては
 このコミットで覆った(lifecycle ruleを新規追加した)。
+
+## 追記2: docs/storage.mdの「別の話」という切り分けを同一セッションから訂正された
+
+上の追記で書いた「Denyポリシーとは無関係な操作なので、Lifecycle-Deny
+迂回の穴とは別の話」という説明に対し、同じ検証セッションから再度指摘が
+入った——noncurrent versionの自動削除もLifecycle駆動である以上、
+根っこの仕組み(Lifecycle expirationはIAMプリンシパルのリクエストとして
+発行されないためバケットポリシー評価の対象外になる、というAWSの既知の
+挙動)はNamazu側の穴と全く同じ。今回はcurrent versionを消さないぶん
+壊滅度は低いが、「`series/`・`bad/`を誤って上書きした場合、元のバージョンへ
+復旧できる猶予はDenyポリシーの有無に関係なくnoncurrent_days(30日)で
+頭打ちになる」という形で同じ仕組みが効いている、切り離すのは不正確、
+という指摘だった。ユーザー(nana)にも経緯を共有した上で「あってもいいかも」
+と伝えてほしいと言われて送られてきたメッセージ。
+
+指摘を認め、[terraform/s3.tf](../terraform/s3.tf)の`cleanup-noncurrent-versions`
+ルール直上に、Namazu PR #85のs3.tfコメントと同趣旨の警告(このルールは
+Denyポリシーを迂回してnoncurrent versionを自動削除する、復旧猶予は
+30日が上限)を追加し、[docs/storage.md](../storage.md)の「別の話」という
+表現も「同じ仕組みが別の形で残っている」に書き直した。

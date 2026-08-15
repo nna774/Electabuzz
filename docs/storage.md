@@ -76,22 +76,31 @@ Lambda IAMロールの制限を受けず、直接AWS CLI/コンソールから`D
 をDenyするバケットポリシーを追加した。NamazuHaUrokoGaNaiの`events/`誤削除防止
 ([PR #85](https://github.com/nna774/NamazuHaUrokoGaNai/pull/85))と同じ構成。
 
-Namazu側では「S3 Lifecycle expirationはバケットポリシーのDenyを迂回する」
-既知の穴があったが、dataバケットにはcurrent versionを消すlifecycle ruleが
-無いため(冒頭のコメント参照)、Electabuzzでは今のところこの穴は該当しない。
-将来`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・
+Namazu側では「S3 Lifecycle expirationはバケットポリシーのDenyを迂回する
+(AWSの既知の挙動——Lifecycle expirationはS3サービス内部の自動処理であり、
+特定のIAMプリンシパルによるリクエストとして発行されるわけではないため、
+バケットポリシー/IAMポリシーの評価対象外になる)」という穴があった。
+dataバケットにはcurrent versionを消すlifecycle ruleが無いため(冒頭の
+コメント参照)、「Denyしているのに`series/`・`bad/`のcurrent versionが
+黙って消える」という一番壊滅的な形ではElectabuzzに該当しない。将来
+`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・
 `bad/`を巻き込まないことを確認すること。
 
-**バージョニング有効化の副作用として、noncurrent versionの掃除だけは
-別途要った。** `series_key()`/`bad_key()`はどちらも「同一内容の再送は
-同じキーに上書き」を意図的な設計として持つ(→`lambda/s3keys.py`)。
-batch-uplinkのspool/retryは通常運用で普通に起きるため、上書きのたびに
-旧バージョンがnoncurrent versionとして残り、掃除する仕組みが無いと
-無期限に積み上がって課金対象が増え続ける(検証セッションの指摘で発覚)。
-current versionのexpireとは別物として、`noncurrent_version_expiration`
-(30日、暫定値)だけを持つlifecycle ruleを追加した。Denyポリシーとは
-無関係な操作(S3の内部的なnoncurrent version破棄)なので、上記の
-Lifecycle-Deny迂回の穴とは別の話。
+**ただし同じ仕組みが、別の形で残っている。** `series_key()`/`bad_key()`は
+どちらも「同一内容の再送は同じキーに上書き」を意図的な設計として持つ
+(→`lambda/s3keys.py`)。batch-uplinkのspool/retryは通常運用で普通に
+起きるため、上書きのたびに旧バージョンがnoncurrent versionとして残り、
+掃除する仕組みが無いと無期限に積み上がって課金対象が増え続ける
+(検証セッションの指摘で発覚)。これに対処するため
+`noncurrent_version_expiration`(30日、暫定値)だけを持つlifecycle ruleを
+追加したが、これもLifecycle駆動の削除であることに変わりはなく、
+**Denyポリシーの有無に関わらずnoncurrent_daysで自動的に消える**——
+「`series/`・`bad/`を誤って上書きしてしまった場合に元のバージョンへ
+復旧できる猶予は、気づいてから30日以内に限られる」という形で効いてくる
+(→[terraform/s3.tf](../terraform/s3.tf)の`cleanup-noncurrent-versions`
+ルール直上のコメント)。Denyポリシーが守るのはcurrent versionの直接削除
+だけで、noncurrent versionの自動掃除までは守らない、というのが正確な
+言い方。
 
 ---
 
