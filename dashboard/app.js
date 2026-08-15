@@ -19,6 +19,12 @@ async function apiGet(path) {
 const SOURCE_LABEL = { NOMINAL: '未規正', NTP: 'NTP', PPS: 'PPS', PPS_NTP: 'PPS+NTP' };
 const SOURCE_CLASS = { NOMINAL: 'badge-nominal', NTP: 'badge-ntp', PPS: 'badge-pps', PPS_NTP: 'badge-pps' };
 
+// トランス巻数比の暫定値(2026-08-15実測、複数回で確認中。→ docs/hardware.md
+// 「v_rms_mvの基準点とトランス巻数比」節)。壁側電圧の概算はチェックボックスの
+// opt-inでのみ出す——巻数比自体が暫定値な上、v_rms_mv → 実電圧の換算も1点校正
+// でしかないため(→ docs/log/2026-08-15-afe-empirical-calibration.md)。
+const TURNS_RATIO_PROVISIONAL = 10.08;
+
 function themeColor(varName) {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
 }
@@ -196,6 +202,17 @@ function renderStatus(series, device) {
     ['時間基準の確度(1σ)', latest.tb_residual_ns + 'ns/s'],
     ['SoC温度', latest.soc_temp_c + '℃'],
   ];
+  // トランス二次側の実効値。v_rms_mvはワイヤフォーマット上の実測値そのもの
+  // (→ docs/wire-format.md)なので、これ自体は概算扱いしない。
+  if (latest.v_rms_mv != null) {
+    rows.push(['トランス二次側電圧', (latest.v_rms_mv / 1000).toFixed(2) + 'V']);
+    if (document.getElementById('show-wall-voltage').checked) {
+      const wallV = (latest.v_rms_mv / 1000) * TURNS_RATIO_PROVISIONAL;
+      // 巻数比が暫定値・AFE換算も1点校正のみなので、有効数字を絞って
+      // 「精密な値に見える」ことを避ける(整数V止まり)。
+      rows.push(['壁側電圧(概算)', `${Math.round(wallV)}V <span class="muted">(巻数比暫定・未校正)</span>`]);
+    }
+  }
   if (device && device.fw_version) rows.push(['ビルド版数', device.fw_version]);
   if (device && device.staleness_s != null) {
     // last_ingest_at_us(受信壁時計)ベース。latest.t_us(測定時刻)ベースの
@@ -214,6 +231,9 @@ function renderStatus(series, device) {
 
 // --- メインループ ---
 let refreshTimer = null;
+// 壁側電圧チェックボックスの再描画用(再フェッチせず直前の値で出し直す)。
+let lastSeries = null;
+let lastDevice = null;
 
 async function refresh() {
   const minutes = document.getElementById('minutes').value;
@@ -227,6 +247,8 @@ async function refresh() {
       const d = await apiGet('/devices');
       device = (d.devices || []).find((x) => x.device_id === series.latest?.device_id) || d.devices?.[0] || null;
     } catch (e) { /* 補助情報なので無視 */ }
+    lastSeries = series;
+    lastDevice = device;
     renderStatus(series, device);
   } catch (e) {
     document.getElementById('status').innerHTML = `<span class="status-ng">取得失敗: ${e.message}</span>`;
@@ -258,6 +280,9 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('minutes').addEventListener('change', refresh);
   document.getElementById('autorefresh').addEventListener('change', scheduleAutoRefresh);
   document.getElementById('refresh-now').addEventListener('click', refresh);
+  document.getElementById('show-wall-voltage').addEventListener('change', () => {
+    if (lastSeries) renderStatus(lastSeries, lastDevice);
+  });
   window.addEventListener('resize', () => refresh());
   refresh();
   scheduleAutoRefresh();
