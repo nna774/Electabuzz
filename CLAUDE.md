@@ -27,9 +27,13 @@
 
 要点だけ言うと、**フェーズ0〜1.5・3・4・5・6・8(v1)は完了し、実機1台が
 `env:record` で稼働、ダッシュボードも実データを表示している。** GNSS受信機・
-アクティブアンテナは到着済みで、**段階1の判定(捕捉衛星数・fix安定性の実測)に
-着手した**（屋外で3D Fix・約2時間の連続ログを確認済み。屋内設置との比較・
-数日分のログ積み上げが残っている）。それが済んだらフェーズ2(PPS)、
+アクティブアンテナは到着済みで、**段階1の判定(捕捉衛星数・fix安定性の実測)は
+完了・クローズした**（2026-08-15。屋外・窓ガラス貼り付け・向き検証・夜通し
+2セッションを跨いだ通算約44時間+αのログで、numSVは常に4機の判定基準を大きく
+上回り、無fixは実質1件のみ。**NEO-M8T不要、航法用受信機(NEO-M8N)で足りると
+確定** → [docs/gnss.md](docs/gnss.md)）。firmware側(`PpsTimebase`/
+`PpsEdgeDetector`/`GnssNmea`)は実装・`main.cpp`統合済みで、**次はフェーズ2
+(PPS同時サンプリング。方式A)の実配線に着手する**——設計全体の成否を決める本丸。
 その先にdetect(フェーズ9)。
 
 - **時間基準**: `firmware/lib/Timebase/`（`NtpTimebase`）で `fs` 実測が完了、
@@ -82,10 +86,12 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 ### 着手可能なタスク
 
-**次の一手は段階1の判定（捕捉衛星数・fix 安定性のログ取り）の続き**（→ [docs/progress.md](docs/progress.md)）。
-屋外(窓越し)で3D Fix・約2時間の連続ログは確認済み。残るのは屋内(窓ガラス貼り付け)
-設置との比較と数日分のログ積み上げ。それが済んだらフェーズ2(PPS同時サンプリング。
-方式A)に着手する——**ここが設計全体の成否を決める**。
+**次の一手はフェーズ2(PPS同時サンプリング。方式A)の実配線**（→ [docs/progress.md](docs/progress.md)）。
+段階1の判定は完了・クローズした——NEO-M8T不要、航法用受信機(NEO-M8N)で足りると確定した
+（→ [docs/gnss.md](docs/gnss.md)）。firmware側(`PpsTimebase`/`PpsEdgeDetector`/`GnssNmea`)は
+実装・`main.cpp`統合済みで、残るのは実配線(GNSS UARTはGPIO13/14に確定済み。PPSはPCM1808の
+R chへL chと同じ分圧+LPF網を追加 → [docs/hardware.md](docs/hardware.md))と
+`kPpsEdgeThreshold`の較正。**ここが設計全体の成否を決める**。
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
 （どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
