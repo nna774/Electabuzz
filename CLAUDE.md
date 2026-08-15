@@ -91,8 +91,10 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 **フェーズ2(PPS同時サンプリング。方式A)は実配線・初回ロックに成功した**
 （2026-08-15、残差30ns/s → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
 `kPpsEdgeThreshold`はプレースホルダ(100000)のままで変更不要と確認済み。
-**次の一手**: ①GNSS UART側で`kGfrqFlagGnssFix`が立たない不具合の調査
-②数時間〜1日のsoakでロックの安定性を確認 ③クラウド(`series/`)に
+`kGfrqFlagGnssFix`が立たない不具合(`NmeaLineReader::lineLen()`が常に0を
+返すバグ)も特定・修正済み(2026-08-15、実機で`flags=0x0003`を確認
+→ [docs/log/2026-08-15-nmea-line-reader-linelen-bug.md](docs/log/2026-08-15-nmea-line-reader-linelen-bug.md))。
+**次の一手**: ①数時間〜1日のsoakでロックの安定性を確認 ②クラウド(`series/`)に
 `timebase_source=PPS`のデータが着弾することを確認。
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化

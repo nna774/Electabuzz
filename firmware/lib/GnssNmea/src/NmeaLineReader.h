@@ -38,6 +38,7 @@ class NmeaLineReader {
   char buf_[kMaxLineLen + 1] = {};
   size_t len_ = 0;
   bool overflowed_ = false;
+  bool lineReady_ = false;  // feed()がtrueを返した後、次のfeed()まで buf_/len_ を保持する
   uint32_t overflowCount_ = 0;
 };
 
