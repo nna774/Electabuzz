@@ -54,7 +54,7 @@
       <label><input type="checkbox" id="autorefresh" checked> 自動更新</label>
       <button id="refresh-now" title="自動更新オフの時に手動で更新する">更新</button>
       <label title="巻数比は暫定値かつAFE換算も1点校正のみ。参考程度に留めること">
-        <input type="checkbox" id="show-wall-voltage"> 壁側電圧を概算表示(巻数比10.08倍・未確定)
+        <input type="checkbox" id="show-wall-voltage"> 電圧グラフを壁側電圧(概算)で表示(巻数比10.08倍・未確定)
       </label>
     </div>
     <div id="status" class="muted status-line"></div>
@@ -67,9 +67,9 @@
       がその区間へ遡って重なる。</p>
 
     <canvas id="vrms-canvas"></canvas>
-    <p class="muted">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの。壁側電圧への
-      概算換算は下の品質テーブルでopt-in表示)。線が途切れている区間は<code>v_rms_mv</code>未対応の
-      ファーム時代のレコード(常に0)であることを示す。</p>
+    <p class="muted" id="vrms-caption">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。
+      上のチェックボックスで壁側電圧(概算)表示に切り替えられる。線が途切れている区間は
+      <code>v_rms_mv</code>未対応のファーム時代のレコード(常に0)であることを示す。</p>
 
     <table id="quality-table">
       <tbody></tbody>

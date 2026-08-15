@@ -20,9 +20,10 @@ const SOURCE_LABEL = { NOMINAL: '未規正', NTP: 'NTP', PPS: 'PPS', PPS_NTP: 'P
 const SOURCE_CLASS = { NOMINAL: 'badge-nominal', NTP: 'badge-ntp', PPS: 'badge-pps', PPS_NTP: 'badge-pps' };
 
 // トランス巻数比の暫定値(2026-08-15実測、複数回で確認中。→ docs/hardware.md
-// 「v_rms_mvの基準点とトランス巻数比」節)。壁側電圧の概算はチェックボックスの
-// opt-inでのみ出す——巻数比自体が暫定値な上、v_rms_mv → 実電圧の換算も1点校正
-// でしかないため(→ docs/log/2026-08-15-afe-empirical-calibration.md)。
+// 「v_rms_mvの基準点とトランス巻数比」節)。品質テーブルの「壁側電圧(概算)」行は
+// 常時表示するが、「暫定・未校正」の注記を添えて精度への過信を防ぐ
+// (巻数比自体が暫定値な上、v_rms_mv → 実電圧の換算も1点校正でしかないため。
+// → docs/log/2026-08-15-afe-empirical-calibration.md)。
 const TURNS_RATIO_PROVISIONAL = 10.08;
 
 function themeColor(varName) {
@@ -172,7 +173,7 @@ function drawFreqChart(cv, series) {
   }
 }
 
-function drawVrmsChart(cv, series) {
+function drawVrmsChart(cv, series, showWall) {
   const { ctx, w, h } = fitCanvas(cv);
   const fg = themeColor('--fg');
   const line = themeColor('--line');
@@ -189,8 +190,11 @@ function drawVrmsChart(cv, series) {
 
   // v_rms_mv=0はv_rms_mv未対応ファーム時代のレコード(常にゼロ埋め)を示す欠測扱い。
   // トランス二次側の実効値が実測でちょうど0mVになることは無い(→ docs/wire-format.md)。
+  // showWall時は巻数比(暫定値)を掛けて壁側電圧の概算に切り替える——データ自体は
+  // 同じv_rms_mvなので、折れ線の形は変わらずスケールだけ変わる。
+  const scale = showWall ? TURNS_RATIO_PROVISIONAL : 1;
   const vArr = series.v_rms_mv || [];
-  const valsV = vArr.map((v) => (v > 0 ? v / 1000 : null));
+  const valsV = vArr.map((v) => (v > 0 ? (v / 1000) * scale : null));
   let vMin = Infinity, vMax = -Infinity;
   for (const v of valsV) {
     if (v == null) continue;
@@ -228,6 +232,8 @@ function drawVrmsChart(cv, series) {
   ctx.textAlign = 'right';
   ctx.fillText(yMaxLabel, padLeft - 4, PAD + 4);
   ctx.fillText(yMinLabel, padLeft - 4, PAD + plotH);
+  // どちらのスケールで描いているか、切り替え忘れが分からなくならないよう明記する。
+  ctx.fillText(showWall ? '壁側電圧(概算)' : 'トランス二次側電圧', padLeft + plotW, PAD - 10);
   ctx.textAlign = 'left';
 
   // 横軸(時刻)の目盛。drawFreqChartと同じ考え方(→そちらのコメント参照)。
@@ -246,7 +252,12 @@ function drawVrmsChart(cv, series) {
   }
   ctx.textAlign = 'left';
 
-  // 折れ線。欠測(v_rms_mv=0、未対応ファーム時代)をまたぐところは線をつながない。
+  // 折れ線。欠測(v_rms_mv=0、未対応ファーム時代)に加えて、series.continuous[i]が
+  // falseの点(セッション再起動・実測dtが想定間隔から大きく外れる=本当の欠測区間)
+  // でも前の点とはつながない。v_rms_mvは瞬時値でDISCONTINUITYでは抑制しない
+  // (→drawVrmsChart呼び出し元のhandler.py側コメント)ため、そこだけを見ると
+  // 「測れていない区間」まで直線でつながって見えてしまう
+  // ——continuousは時刻の実測ギャップだけを見て線をつなぐかどうかを判定する。
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -254,6 +265,7 @@ function drawVrmsChart(cv, series) {
   for (let i = 0; i < n; i++) {
     const v = valsV[i];
     if (v == null) { drawing = false; continue; }
+    if (series.continuous && series.continuous[i] === false) drawing = false;
     const px = x(series.t_us[i]);
     const py = y(Math.min(Math.max(v, yMin), yMax));
     if (!drawing) { ctx.moveTo(px, py); drawing = true; } else { ctx.lineTo(px, py); }
@@ -292,15 +304,15 @@ function renderStatus(series, device) {
     ['SoC温度', latest.soc_temp_c + '℃'],
   ];
   // トランス二次側の実効値。v_rms_mvはワイヤフォーマット上の実測値そのもの
-  // (→ docs/wire-format.md)なので、これ自体は概算扱いしない。
+  // (→ docs/wire-format.md)なので、これ自体は概算扱いしない。壁側電圧(概算)は
+  // 巻数比が暫定値・AFE換算も1点校正のみだが、常時2行並べて出す
+  // (opt-inチェックボックスは電圧グラフの縦軸切り替え専用に変更した)。
   if (latest.v_rms_mv != null) {
-    rows.push(['トランス二次側電圧', (latest.v_rms_mv / 1000).toFixed(2) + 'V']);
-    if (document.getElementById('show-wall-voltage').checked) {
-      const wallV = (latest.v_rms_mv / 1000) * TURNS_RATIO_PROVISIONAL;
-      // 巻数比が暫定値・AFE換算も1点校正のみなので、有効数字を絞って
-      // 「精密な値に見える」ことを避ける(整数V止まり)。
-      rows.push(['壁側電圧(概算)', `${Math.round(wallV)}V <span class="muted">(巻数比暫定・未校正)</span>`]);
-    }
+    const secondaryV = latest.v_rms_mv / 1000;
+    rows.push(['トランス二次側電圧', secondaryV.toFixed(2) + 'V']);
+    const wallV = secondaryV * TURNS_RATIO_PROVISIONAL;
+    // 有効数字を絞って「精密な値に見える」ことを避ける(整数V止まり)。
+    rows.push(['壁側電圧(概算)', `${Math.round(wallV)}V <span class="muted">(巻数比暫定・未校正)</span>`]);
   }
   if (device && device.fw_version) rows.push(['ビルド版数', device.fw_version]);
   if (device && device.staleness_s != null) {
@@ -324,12 +336,28 @@ let refreshTimer = null;
 let lastSeries = null;
 let lastDevice = null;
 
+// 電圧グラフの縦軸を「トランス二次側電圧」⇔「壁側電圧(概算)」で切り替える。
+// データ自体は再フェッチせず、直前のseriesで描き直すだけ(→#show-wall-voltage)。
+function redrawVrmsChart() {
+  if (!lastSeries) return;
+  const showWall = document.getElementById('show-wall-voltage').checked;
+  drawVrmsChart(document.getElementById('vrms-canvas'), lastSeries, showWall);
+  document.getElementById('vrms-caption').innerHTML = showWall
+    ? '縦軸: 壁側電圧の概算値[V](<code>v_rms_mv</code>×巻数比10.08倍。巻数比は暫定値・未確定なので' +
+      '参考程度に留めること)。線が途切れている区間は<code>v_rms_mv</code>未対応のファーム時代の' +
+      'レコード(常に0)であることを示す。'
+    : '縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。' +
+      '上のチェックボックスで壁側電圧(概算)表示に切り替えられる。線が途切れている区間は' +
+      '<code>v_rms_mv</code>未対応のファーム時代のレコード(常に0)であることを示す。';
+}
+
 async function refresh() {
   const minutes = document.getElementById('minutes').value;
   try {
     const series = await apiGet(`/recent?minutes=${minutes}`);
     drawFreqChart(document.getElementById('freq-canvas'), series);
-    drawVrmsChart(document.getElementById('vrms-canvas'), series);
+    const showWall = document.getElementById('show-wall-voltage').checked;
+    drawVrmsChart(document.getElementById('vrms-canvas'), series, showWall);
     // 生存台帳(/devices)は補助情報。取得できなくても(まだ立てていない環境・
     // 一時的な失敗)メインのグラフ・ステータス表示は妨げない。
     let device = null;
@@ -370,9 +398,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('minutes').addEventListener('change', refresh);
   document.getElementById('autorefresh').addEventListener('change', scheduleAutoRefresh);
   document.getElementById('refresh-now').addEventListener('click', refresh);
-  document.getElementById('show-wall-voltage').addEventListener('change', () => {
-    if (lastSeries) renderStatus(lastSeries, lastDevice);
-  });
+  document.getElementById('show-wall-voltage').addEventListener('change', redrawVrmsChart);
   window.addEventListener('resize', () => refresh());
   refresh();
   scheduleAutoRefresh();
