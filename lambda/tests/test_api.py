@@ -115,6 +115,50 @@ def test_v_rms_mv_survives_discontinuity_flag(h):
     assert body["v_rms_mv"] == [8_500, 8_520, 8_490]
 
 
+def test_continuous_breaks_on_session_change_but_not_discontinuity_flag(h):
+    # v_rms_mv用の「線をつないでよいか」判定(continuous)は、freq_hzのNoneとは
+    # 別基準。DISCONTINUITYが立ったバッチでも実測dtが想定間隔どおりなら
+    # つなぐ(freqと違い値自体を抑制する理由が無いのと同じ理由)が、
+    # session_idが変わる(再起動・実データ欠測)点ではつながない。
+    recs1 = [(cycles(50.0, i), 8_500, 0) for i in range(2)]
+    recs2 = [(cycles(50.0, i), 8_500, 0) for i in range(3)]  # DISCONTINUITY立ち、同一セッション
+    recs3 = [(cycles(50.0, i), 8_500, 0) for i in range(2)]  # 新セッション(再起動)
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs1)
+    seed(h, device_id=1, batch_start_us=BASE_US + 2_000_000, session_id=1, records=recs2,
+         flags=1 << 2)  # GfrqFlagDiscontinuity
+    seed(h, device_id=1, batch_start_us=BASE_US + 5_000_000, session_id=2, records=recs3)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 10_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["n"] == 7
+    assert body["continuous"][0] is False  # 系列先頭
+    assert body["continuous"][1] is True
+    assert body["continuous"][2] is True  # DISCONTINUITY境界だが実測dtは想定どおり→つなぐ
+    assert body["continuous"][3] is True
+    assert body["continuous"][4] is True
+    assert body["continuous"][5] is False  # セッション境界→つながない
+    assert body["continuous"][6] is True
+    # v_rms_mv自体はDISCONTINUITYでもセッション境界でも欠けない。
+    assert body["v_rms_mv"] == [8_500] * 7
+
+
+def test_continuous_breaks_on_large_time_gap_within_session(h):
+    # 同一セッションでも、実測dtが想定間隔の2倍を超えたら(オフライン期間等)つながない。
+    recs1 = [(cycles(50.0, i), 8_500, 0) for i in range(2)]
+    recs2 = [(cycles(50.0, i), 8_500, 0) for i in range(2)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs1)
+    # 本来2秒後のはずが、10秒空いて再開した想定。
+    seed(h, device_id=1, batch_start_us=BASE_US + 10_000_000, session_id=1, records=recs2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 15_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["n"] == 4
+    assert body["continuous"][2] is False  # 大きな時間ギャップ→つながない
+    assert body["v_rms_mv"] == [8_500] * 4
+
+
 def test_frequency_continues_across_batch_boundary(h):
     # バッチ1: 3件(t=0,1,2s)。バッチ2: 同一セッションで2件(t=3,4s)。境界も50Hzのまま。
     recs1 = [(cycles(50.0, i), 0, 0) for i in range(3)]
