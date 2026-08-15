@@ -18,6 +18,35 @@ Electabuzzは実機1台・2号機の予定なし・watchdog/生存台帳が未�
 埋め込み）はNamazuを踏襲するが、配線・パーティション・トリガーは
 Electabuzz側で決め直した。
 
+## 0. クイックリファレンス（実際に配る時はここだけ読めばいい）
+
+**きれいなworktree（mainから素朴に切った、untrackedファイルも変更も無い状態）で
+ビルドすること。** リポジトリ直下に`memo.md`等の無関係なuntrackedファイルが
+あるだけでも`git status --porcelain`がdirtyと判定し、配布版数が`<hash>-dirty`
+になる（動作は変わらないが、後から見た時に「本当にこの内容か」を素直に信じられ
+なくなる。2026-08-15、GNSSアンテナ向き検証の生キャプチャログが作業ツリー直下に
+残っていたせいで`--allow-dirty`を使う羽目になった——Namazu側で2026-08-11に
+踏んだのと同じ落とし穴）。`EnterWorktree`等で新しいworktreeを切れば
+untrackedファイルを一切引き継がないので、`--allow-dirty`無しで素直に通る
+（→ Namazu `docs/ota.md`§0）。
+
+```bash
+# 1. きれいなworktreeで確認（念のため）
+git status --short   # 何も出なければOK
+
+# 2. ビルド・S3公開（gitの短縮hashがそのまま配布バージョンになる）
+tools/publish_ota.sh
+#   最後に「python tools/request_ota.py request <device_id> <version>」が出力される
+
+# 3. デバイスに許可を出す(実機1台構成なのでdevice_id=1固定)
+.venv/bin/python tools/request_ota.py request 1 <version> --yes
+#   --yes を付けないと確認プロンプトで止まる(非対話実行では必須)
+
+# 4. 反映待ち・確認（バッチ送信のたびに照合するので数十秒〜数分かかる）
+.venv/bin/python tools/request_ota.py list
+#   pending_ota_versionが消え、fw_versionが指定バージョンに変われば成功
+```
+
 ## 1. 採用した方式: HTTPSプル型のみ（push型は作らない）
 
 Namazuは§2でLAN内push(ArduinoOTA)、§7でHTTPSプル型の両方を実装しているが、
