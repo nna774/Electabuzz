@@ -148,7 +148,6 @@ static constexpr uint64_t kPpsEdgeRefractorySamples = kFsNominalHz / 2;
 //
 // ここの定数は`fs`と違って実測で追い続けている量ではなく、固定の回路設計値
 // (R1/R2)とデータシート値・実測1点(VCC)から逆算するだけの**近似**。
-// 用途(電圧異常・停電判定の閾値判定)には十分だが、絶対確度を主張しない。
 static constexpr double kAfeR1Ohms = 100000.0;                    // docs/hardware.md
 static constexpr double kAfeR2Ohms = 6800.0;                      // docs/hardware.md
 static constexpr double kAdcInputImpedanceOhms = 60000.0;         // PCM1808 datasheet typ.
@@ -157,9 +156,29 @@ static constexpr double kAfeR2EffOhms =
     (kAfeR2Ohms * kAdcInputImpedanceOhms) / (kAfeR2Ohms + kAdcInputImpedanceOhms);
 // 実効分圧比 k = R2eff/(R1+R2eff) ≒ 0.0576(docs/hardware.md記載の値と一致)。
 static constexpr double kAfeDividerRatio = kAfeR2EffOhms / (kAfeR1Ohms + kAfeR2EffOhms);
-// DevKitの5Vピン実測値(2026-08-05、テスタ。→ docs/hardware.md)。
+// DevKitの5Vピン実測値(2026-08-05、テスタ。→ docs/hardware.md。2026-08-15に
+// DC再実測して4.83Vとほぼ同じ値を確認済み——経年ドリフトは無罪と確定した)。
 // フルスケールが0.6×VCCで決まるため、電源の取りかたを変えたらここも直すこと。
 static constexpr double kAdcVccVolts = 4.84;
 // PCM1808は24bit符号付き。i2s_readは32bit枠にMSB詰めで来るのを>>8で戻すので
 // フルスケール振幅は2^23(main.cppのpumpI2s()参照)。
 static constexpr double kAdcFullScaleCode = 8388608.0;  // 2^23
+
+// R1/R2/VCCの理論値だけで組んだ上の換算式は、実測(DMM)と比べると系統的に低く出る
+// ことが分かった(2026-08-15)。3つの容疑者を実測で順に消去した:
+//   1. 分圧網(R1/R2/ADC入力インピーダンス) — node A(PCM1808のL IN、分圧後・
+//      GND基準)をDMMで直接実測して0.577Vと確認。二次側実測10.21V(PR #45)
+//      との比は≒0.0565で、理論分圧比kAfeDividerRatio(≒0.0576)とのズレは
+//      1.8%(抵抗の公称誤差の範囲)。**無罪。**
+//   2. VCCの経年ドリフト — 2026-08-05実測4.84Vに対し2026-08-15にDC再実測して
+//      4.83V。ほぼ同じ。**無罪。**
+//   3. Goertzelの振幅推定式(`ampCode = 2×magnitude/N`) — 合成正弦波で1%以内の
+//      一致を確認済み(firmware/lib/Goertzel/test/test_goertzel.cpp)。**無罪。**
+// 残る容疑は「フルスケールコード(2^23)が本当に0.6×VCCのVpp入力レンジに
+// 対応するか」という**データシートの解釈そのもの**だけになった——オーディオ
+// 用ADCでは0.6×VCCがheadroomを見込んだ公称値で、物理クリップ点はもっと外側、
+// というケースがありうる。オシロでの波形直接確認かデータシートの当該項目の
+// 読み直しをしないと最終確定はできないので、それまでは実測との比をそのまま
+// 経験係数として掛ける。導出: docs/log/2026-08-15-afe-empirical-calibration.md。
+// **1点校正でしかない。** 複数回・複数条件(負荷変動・気温)での再検証はこれから。
+static constexpr double kAdcAmplitudeCalFactor = 1.182;
