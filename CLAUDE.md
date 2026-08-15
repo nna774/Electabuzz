@@ -91,16 +91,20 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 **フェーズ2(PPS同時サンプリング。方式A)は実配線・初回ロックに成功した**
 （2026-08-15、残差30ns/s → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
 `kPpsEdgeThreshold`はプレースホルダ(100000)のままで変更不要と確認済み。
-**次の一手**: ①GNSS UART側で`kGfrqFlagGnssFix`が立たない不具合の調査
-②数時間〜1日のsoakでロックの安定性を確認 ③クラウド(`series/`)に
+`kGfrqFlagGnssFix`が立たない不具合(`NmeaLineReader::lineLen()`が常に0を
+返すバグ)も特定・修正済み(2026-08-15、実機で`flags=0x0003`を確認
+→ [docs/log/2026-08-15-nmea-line-reader-linelen-bug.md](docs/log/2026-08-15-nmea-line-reader-linelen-bug.md))。
+**次の一手**: ①数時間〜1日のsoakでロックの安定性を確認 ②クラウド(`series/`)に
 `timebase_source=PPS`のデータが着弾することを確認。
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
 （どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
-**OTA(pull型)は実装済み**——実機でのUSB挿し直しが面倒という声を受けて着手し、
-NVS化・ルートCA埋め込み・バッチ送信便乗トリガーまで実装したが、**実機での
-動作確認はまだ**（→ [docs/ota.md](docs/ota.md)）。detect・rollup・watchdog 用の
-terraform は対応する Lambda がまだ無いので書いていない（フェーズ9）。
+**OTA(pull型)は実装・実機実クラウド確認とも完了済み**（2026-08-15、
+`v_rms_mv`配線を含む最新ビルドで配信全経路(`publish_ota.sh`→
+`request_ota.py`→DynamoDB→取得→書き込み→再起動→台帳自動解放)を実機で確認
+→ [docs/ota.md](docs/ota.md)、[docs/log/2026-08-15-vrms-mv-ota-live-verification.md](docs/log/2026-08-15-vrms-mv-ota-live-verification.md)）。
+detect・rollup・watchdog 用の terraform は対応する Lambda がまだ無いので
+書いていない（フェーズ9）。
 
 ## 3. 絶対に破ってはいけない不変条件
 

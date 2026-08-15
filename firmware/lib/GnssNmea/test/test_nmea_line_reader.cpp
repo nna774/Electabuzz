@@ -26,6 +26,11 @@ int main() {
     }
     check("\\nで行が確定する", gotLine);
     check("行の中身が正しい(\\rは除く)", std::strcmp(r.line(), "$GNGGA,hello*47") == 0);
+    // 呼び出し側(main.cpp)はparseGga(line(), lineLen(), ...)の形で使う。
+    // lineLen()がstrlen(line())と食い違うと、feed()がtrueを返した直後でも
+    // parseGgaがlen不足で即falseになる(過去に実際に踏んだ回帰 → 2026-08-15)。
+    check("lineLen()がline()の実際の長さと一致する",
+          r.lineLen() == std::strlen(r.line()));
   }
 
   // --- 2. 複数行を続けて正しく切り出せるか ---
