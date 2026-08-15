@@ -77,10 +77,21 @@ Lambda IAMロールの制限を受けず、直接AWS CLI/コンソールから`D
 ([PR #85](https://github.com/nna774/NamazuHaUrokoGaNai/pull/85))と同じ構成。
 
 Namazu側では「S3 Lifecycle expirationはバケットポリシーのDenyを迂回する」
-既知の穴があったが、dataバケットにはまだlifecycle ruleが無いため
-(冒頭のコメント参照)、Electabuzzでは今のところこの穴は該当しない。将来
-`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・`bad/`を
-巻き込まないことを確認すること。
+既知の穴があったが、dataバケットにはcurrent versionを消すlifecycle ruleが
+無いため(冒頭のコメント参照)、Electabuzzでは今のところこの穴は該当しない。
+将来`raw/`のexpireを実際に導入する際は、そのfilter prefixが`series/`・
+`bad/`を巻き込まないことを確認すること。
+
+**バージョニング有効化の副作用として、noncurrent versionの掃除だけは
+別途要った。** `series_key()`/`bad_key()`はどちらも「同一内容の再送は
+同じキーに上書き」を意図的な設計として持つ(→`lambda/s3keys.py`)。
+batch-uplinkのspool/retryは通常運用で普通に起きるため、上書きのたびに
+旧バージョンがnoncurrent versionとして残り、掃除する仕組みが無いと
+無期限に積み上がって課金対象が増え続ける(検証セッションの指摘で発覚)。
+current versionのexpireとは別物として、`noncurrent_version_expiration`
+(30日、暫定値)だけを持つlifecycle ruleを追加した。Denyポリシーとは
+無関係な操作(S3の内部的なnoncurrent version破棄)なので、上記の
+Lifecycle-Deny迂回の穴とは別の話。
 
 ---
 

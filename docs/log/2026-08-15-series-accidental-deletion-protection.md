@@ -57,3 +57,25 @@
 (→ docs/cloud.md)なので、除外する理由が無いという判断。バケット
 ポリシーの`resources`に`${aws_s3_bucket.data.arn}/bad/*`を追加しただけで、
 バージョニングは元々バケット全体に効いているため変更不要。
+
+## 追記: noncurrent versionの無期限蓄積を検証セッションの指摘で修正した
+
+別セッション(検証専用)からのクロスセッションメッセージで、`series_key()`/
+`bad_key()`が「同一内容の再送は同じキーに上書き」を意図的な冪等設計として
+持っている(→`lambda/s3keys.py`)ため、バージョニング有効化だけだと
+batch-uplinkの通常のspool/retryのたびにnoncurrent versionが際限なく
+積み上がる、という指摘を受けた。Namazu側(PR #85)は同じ状況に対して
+`noncurrent_version_expiration`を明示的に足して対処していたのに、
+このPRではその部分だけ落ちていた——「Namazu #85と同じ構成」と謳って
+いながら実際には片翼だけコピーしていたという抜け。
+
+`lambda/s3keys.py`のdocstringを実際に読んで指摘が正しいと確認した上で、
+current versionのexpireとは別物として`noncurrent_version_expiration`
+(30日、Namazu #85の値を踏襲した暫定値)だけを持つ`aws_s3_bucket_lifecycle_configuration`
+を追加した。current versionの保存方針(永久)は変えていない。
+
+## 何が覆ったか(追記分)
+
+「dataバケットにはlifecycle ruleが無い」という記述は、current version
+expireについては引き続き真だが、noncurrent version expireについては
+このコミットで覆った(lifecycle ruleを新規追加した)。
