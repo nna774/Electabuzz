@@ -2,7 +2,8 @@
 
 商用電力の周波数と**系統時刻偏差**（グリッドの時計が標準時から何秒ずれているか）を
 常時測る装置。設置先は 50Hz 地域（東日本）。**実機1台が稼働中で、系統周波数の
-ダッシュボードも公開済み**（→ 2章）。GNSS到着後のフェーズ2(PPS)が最後の本丸。
+ダッシュボードも公開済み**（→ 2章）。**フェーズ2(PPS)は実配線・初回ロック成功済み**
+（2026-08-15、残差30ns/s）——soak確認とクラウド着弾確認が残っている。
 
 このファイルは**ハブであって仕様ではない**。実体は各ドキュメントにある。
 必要なノードまでリンクを辿れ。全部読む必要はない。
@@ -31,9 +32,10 @@
 完了・クローズした**（2026-08-15。屋外・窓ガラス貼り付け・向き検証・夜通し
 2セッションを跨いだ通算約44時間+αのログで、numSVは常に4機の判定基準を大きく
 上回り、無fixは実質1件のみ。**NEO-M8T不要、航法用受信機(NEO-M8N)で足りると
-確定** → [docs/gnss.md](docs/gnss.md)）。firmware側(`PpsTimebase`/
-`PpsEdgeDetector`/`GnssNmea`)は実装・`main.cpp`統合済みで、**次はフェーズ2
-(PPS同時サンプリング。方式A)の実配線に着手する**——設計全体の成否を決める本丸。
+確定** → [docs/gnss.md](docs/gnss.md)）。**フェーズ2(PPS同時サンプリング。方式A)は
+実配線・初回ロックに成功した**（2026-08-15、残差30ns/sのppb級。設計全体の成否を
+決める本丸が実測で通った → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
+残るのはsoak確認・クラウド着弾確認・GNSS UART側のfixフラグ不具合調査。
 その先にdetect(フェーズ9)。
 
 - **時間基準**: `firmware/lib/Timebase/`（`NtpTimebase`）で `fs` 実測が完了、
@@ -86,12 +88,12 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 ### 着手可能なタスク
 
-**次の一手はフェーズ2(PPS同時サンプリング。方式A)の実配線**（→ [docs/progress.md](docs/progress.md)）。
-段階1の判定は完了・クローズした——NEO-M8T不要、航法用受信機(NEO-M8N)で足りると確定した
-（→ [docs/gnss.md](docs/gnss.md)）。firmware側(`PpsTimebase`/`PpsEdgeDetector`/`GnssNmea`)は
-実装・`main.cpp`統合済みで、残るのは実配線(GNSS UARTはGPIO13/14に確定済み。PPSはPCM1808の
-R chへL chと同じ分圧+LPF網を追加 → [docs/hardware.md](docs/hardware.md))と
-`kPpsEdgeThreshold`の較正。**ここが設計全体の成否を決める**。
+**フェーズ2(PPS同時サンプリング。方式A)は実配線・初回ロックに成功した**
+（2026-08-15、残差30ns/s → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
+`kPpsEdgeThreshold`はプレースホルダ(100000)のままで変更不要と確認済み。
+**次の一手**: ①GNSS UART側で`kGfrqFlagGnssFix`が立たない不具合の調査
+②数時間〜1日のsoakでロックの安定性を確認 ③クラウド(`series/`)に
+`timebase_source=PPS`のデータが着弾することを確認。
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
 （どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
