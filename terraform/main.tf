@@ -23,4 +23,21 @@ locals {
     ELBZ_BUCKET        = local.data_bucket
     NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
   }
+
+  # watchdog はS3を触らないのでELBZ_BUCKETは要らない。しきい値・Slack設定・
+  # ダッシュボードリンク用ドメインだけ渡す(→ docs/cloud.md「watchdog」)。
+  watchdog_env = {
+    NAMZ_DEVICES_TABLE         = aws_dynamodb_table.devices.name
+    NAMZ_OFFLINE_AFTER_S       = tostring(var.offline_after_seconds)
+    NAMZ_OFFLINE_RENOTIFY_S    = tostring(var.offline_renotify_seconds)
+    NAMZ_LAG_AFTER_S           = tostring(var.lag_after_seconds)
+    NAMZ_LAG_RENOTIFY_S        = tostring(var.lag_renotify_seconds)
+    NAMZ_POWER_FAIL_RENOTIFY_S = tostring(var.power_fail_renotify_seconds)
+    NAMZ_OTA_STUCK_AFTER_S     = tostring(var.ota_stuck_after_seconds)
+    NAMZ_OTA_STUCK_RENOTIFY_S  = tostring(var.ota_stuck_renotify_seconds)
+    NAMZ_SLACK_WEBHOOK_URL     = var.slack_webhook_url
+    NAMZ_SLACK_CHANNEL         = var.slack_channel
+    NAMZ_SLACK_MENTION         = var.slack_mention
+    NAMZ_DASHBOARD_URL         = local.custom_domain_enabled ? "https://${var.dashboard_domain}" : "https://${aws_cloudfront_distribution.dashboard.domain_name}"
+  }
 }

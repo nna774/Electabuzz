@@ -3,7 +3,7 @@
 # handler.py + 同階層の依存モジュールを集め、batch_uplink を同梱する。
 # terraform apply の前に実行すること。
 #
-# 今は ingest/api の2本（detect/rollup は未実装 → docs/roadmap.md）。
+# 今は ingest/api/watchdog の3本（detect/rollup は未実装 → docs/roadmap.md）。
 # 増えたら Namazu の build_lambda.sh と同じ形で for ループに足す。
 set -euo pipefail
 
@@ -28,6 +28,9 @@ build_ingest() {
   cp "$LAMBDA/s3keys.py" "$stage/s3keys.py"
   cp "$LAMBDA/wire_gridfreq.py" "$stage/wire_gridfreq.py"
   cp "$LAMBDA/ota_target.py" "$stage/ota_target.py"
+  # watchdog向けの状態記録(power_fail_watch/reboot_watch/watchdog_mute)。
+  # → docs/cloud.md「watchdog」
+  cp -r "$LAMBDA/common" "$stage/common"
   # 送信基盤の共通部分(auth/devices)。boto3はLambdaランタイムに同梱済みなので
   # ここでは入れない。numpyも不要（wire_gridfreq/s3keysはstdlibのみ）。
   # **タグで pin する。** #master にすると firmware 側の変更が黙って混入する。
@@ -54,5 +57,20 @@ build_api() {
   echo "built $BUILD/api.zip"
 }
 
+build_watchdog() {
+  stage="$BUILD/watchdog"
+  mkdir -p "$stage"
+  cp "$LAMBDA/watchdog/handler.py" "$stage/handler.py"
+  # power_fail_watch/reboot_watch/watchdog_mute/ota_watch。S3を触らないので
+  # s3keys/wire_gridfreqもnumpyも不要。
+  cp -r "$LAMBDA/common" "$stage/common"
+  "$PY" -m pip install --quiet --no-deps \
+    --target "$stage" "git+https://github.com/nna774/batch-uplink@$UPLINK_VERSION" >/dev/null
+  find "$stage" -name '__pycache__' -type d -prune -exec rm -rf {} +
+  (cd "$stage" && zip -qr "$BUILD/watchdog.zip" .)
+  echo "built $BUILD/watchdog.zip"
+}
+
 build_ingest
 build_api
+build_watchdog

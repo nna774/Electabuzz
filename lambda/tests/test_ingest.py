@@ -74,6 +74,16 @@ def corrupt_payload(raw: bytes) -> bytes:
     return bytes(b)
 
 
+def with_power_fail(raw: bytes) -> bytes:
+    """flags(offset 52, u16 LE)のpower_failビットを立てる。
+
+    crc32はrecords()部分だけが対象でヘッダは含まれない(→ docs/wire-format.md)ので、
+    ヘッダのflagsを書き換えてもCRCは壊れない。"""
+    b = bytearray(raw)
+    b[52] |= int(wire_gridfreq.BatchFlag.POWER_FAIL)
+    return bytes(b)
+
+
 # --- 正常系 -------------------------------------------------------------
 
 def test_stores_under_series_prefix(h, golden):
@@ -312,6 +322,89 @@ def test_record_batch_receives_fw_version_header(h, golden, monkeypatch):
     ev["headers"]["X-Elbz-Fw-Version"] = "abc1234"
     assert h.handler(ev, None)["statusCode"] == 200
     assert calls[0]["fw_version"] == "abc1234"
+
+
+# --- watchdog向けの状態記録(→ docs/cloud.md「watchdog」。いずれも主経路ではない) ----
+
+def test_power_fail_flag_is_recorded_when_table_set(h, golden, monkeypatch):
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    monkeypatch.setattr(h.devices, "get_device", lambda did: None)
+    calls = []
+    monkeypatch.setattr(h.power_fail_watch, "record", lambda *a: calls.append(a))
+    assert h.handler(make_event(with_power_fail(golden)), None)["statusCode"] == 200
+    assert calls == [(2, True)]
+
+
+def test_power_fail_false_is_recorded_when_flag_absent(h, golden, monkeypatch):
+    """golden fixtureのflagsはpps_locked|gnss_fixのみでpower_failは立っていない。"""
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    monkeypatch.setattr(h.devices, "get_device", lambda did: None)
+    calls = []
+    monkeypatch.setattr(h.power_fail_watch, "record", lambda *a: calls.append(a))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert calls == [(2, False)]
+
+
+def test_power_fail_skipped_when_table_unset(h, golden, monkeypatch):
+    calls = []
+    monkeypatch.setattr(h.power_fail_watch, "record", lambda *a: calls.append(a))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert calls == []
+
+
+def test_reboot_recorded_when_uptime_header_present(h, golden, monkeypatch):
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    monkeypatch.setattr(h.devices, "get_device", lambda did: {"device_id": did})
+    calls = []
+    monkeypatch.setattr(h.reboot_watch, "record_boot_epoch", lambda *a: calls.append(a))
+    ev = make_event(golden)
+    ev["headers"]["X-Elbz-Uptime-Us"] = "100000"
+    assert h.handler(ev, None)["statusCode"] == 200
+    # golden の batch_start_us = 1750000000123456
+    assert calls == [(2, 1750000000123456 - 100000)]
+
+
+def test_reboot_not_updated_within_drift_threshold(h, golden, monkeypatch):
+    """前回値からのズレがドリフト許容(±2分)以内なら再起動とみなさない。"""
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    prev = 1750000000123456 - 100000
+    monkeypatch.setattr(h.devices, "get_device", lambda did: {"device_id": did, "boot_epoch_us": prev})
+    calls = []
+    monkeypatch.setattr(h.reboot_watch, "record_boot_epoch", lambda *a: calls.append(a))
+    ev = make_event(golden)
+    ev["headers"]["X-Elbz-Uptime-Us"] = "100000"
+    assert h.handler(ev, None)["statusCode"] == 200
+    assert calls == []
+
+
+def test_reboot_skipped_without_uptime_header(h, golden, monkeypatch):
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(h.reboot_watch, "record_boot_epoch", lambda *a: calls.append(a))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert calls == []
+
+
+def test_mute_is_cleared_on_every_batch(h, golden, monkeypatch):
+    monkeypatch.setenv("NAMZ_DEVICES_TABLE", "electabuzz-devices")
+    monkeypatch.setattr(h.devices, "record_batch", lambda *a, **k: None)
+    monkeypatch.setattr(h.devices, "get_device", lambda did: None)
+    calls = []
+    monkeypatch.setattr(h.watchdog_mute, "clear_mute", lambda did: calls.append(did))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert calls == [2]
+
+
+def test_mute_clear_skipped_when_table_unset(h, golden, monkeypatch):
+    calls = []
+    monkeypatch.setattr(h.watchdog_mute, "clear_mute", lambda did: calls.append(did))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert calls == []
 
 
 def test_telemetry_headers_are_logged_not_stored(h, golden, capsys):
