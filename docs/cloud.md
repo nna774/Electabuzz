@@ -137,7 +137,7 @@ NOMINAL区間かつ補正係数が求まっているレコードには
 補正値を出さない」形で守る。レスポンスには各点の`timebase_source`(文字列配列)
 も追加し、ダッシュボードが区間ごとに線種を変えられるようにしてある。
 
-### TE絶対値表示のアンカー(2026-08-17設計・未実装)
+### TE絶対値表示のアンカー(2026-08-17設計・実装)
 
 **v1は`timebase_source=PPS`限定。** NOMINAL/NTP区間はTEを描かない
 (NTPロックでの帯付き表示は`docs/open-questions.md`へ送った——実運用では
@@ -149,12 +149,15 @@ TEは積分量なので、`freq_hz`のような「隣接点との差分」では
 扱い」)。アンカーは「PPSロック中かつ直前にdiscontinuity/power_fail無し」の
 連続区間ごとに作り直すので、1セッション内で複数行になりうる。
 
-新規テーブル`${local.name}-te-anchors`は、並行してマージされていた`detect`
-(下記)の`electabuzz-events`と同じ形にする——**hash_keyのみ(`anchor_id`, S)、
-`PAY_PER_REQUEST`、実機1台前提で`scan`+Pythonの絞り込みで足りる**という
-判断も揃える。`anchor_id`は`event_id`と同じ発想の決定的な文字列
-(`f"{device_id:04d}-{session_id}-{t0_us}"`)。属性は`device_id`/`session_id`/
-`t0_us`/`cycles0_q16`/`run_open`(BOOL)/`tb_residual_ns`。
+新規テーブル`${local.name}-te-anchors`(`terraform/te_anchors.tf`)は、並行して
+マージされていた`detect`(下記)の`electabuzz-events`と同じ形にする——
+**hash_keyのみ(`anchor_id`, S)、`PAY_PER_REQUEST`、実機1台前提で`scan`+
+Pythonの絞り込みで足りる**という判断も揃える。`anchor_id`は`event_id`と同じ
+発想の決定的な文字列(`f"{device_id:04d}-{session_id}-{t0_us}"`)。属性は
+`device_id`/`session_id`/`t0_us`/`cycles0`(N、`Record.cycles`の値そのもの。
+Q16は`wire_gridfreq.Record.cycles`が既に割り戻し済みなのでテーブル側では
+生のcyclesを持たない)/`run_open`(BOOL)/`tb_residual_ns`。実装は
+`lambda/common/te_anchors.py`。
 
 - **書き込み(ingest)**: バッチに`discontinuity`/`power_fail`が立っていたら、
   該当device×sessionで`run_open=true`の行を`scan`で探し、あれば`run_open=false`

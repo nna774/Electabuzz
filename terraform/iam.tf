@@ -65,6 +65,21 @@ data "aws_iam_policy_document" "lambda" {
     ]
     resources = [aws_dynamodb_table.events.arn]
   }
+
+  # TE絶対値表示のセッションアンカー(→ te_anchors.tf)。ingestが書く
+  # (te_anchors.open_run_if_needed/close_open_run)、apiが読む
+  # (_series_payloadのTE計算、te_anchors.anchors_for_session)。
+  statement {
+    sid    = "TeAnchors"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Scan",
+    ]
+    resources = [aws_dynamodb_table.te_anchors.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {

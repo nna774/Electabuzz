@@ -273,6 +273,101 @@ function drawVrmsChart(cv, series, showWall) {
   ctx.stroke();
 }
 
+function drawTeChart(cv, series) {
+  const { ctx, w, h } = fitCanvas(cv);
+  const fg = themeColor('--fg');
+  const line = themeColor('--line');
+  const accent = themeColor('--accent');
+  ctx.clearRect(0, 0, w, h);
+
+  const n = series.t_us.length;
+  const teArr = series.te_seconds || [];
+  if (n === 0 || !teArr.some((v) => v != null)) {
+    ctx.fillStyle = fg;
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillText('データなし(PPSロック区間のみ表示)', PAD, h / 2);
+    return;
+  }
+
+  const t0 = series.start_us, t1 = series.end_us;
+  let teMin = Infinity, teMax = -Infinity;
+  for (const v of teArr) {
+    if (v == null) continue;
+    teMin = Math.min(teMin, v);
+    teMax = Math.max(teMax, v);
+  }
+  // 0を必ず範囲に含める。アンカーが作り直されるたびそこから測り直す値なので、
+  // 0が軸の外に出ると「アンカーからの偏差」という意味が読み取れなくなる。
+  teMin = Math.min(teMin, 0);
+  teMax = Math.max(teMax, 0);
+  const margin = Math.max((teMax - teMin) * 0.15, 0.001);
+  const yMin = teMin - margin, yMax = teMax + margin;
+  const yMaxLabel = (yMax * 1000).toFixed(1) + 'ms';
+  const yMinLabel = (yMin * 1000).toFixed(1) + 'ms';
+
+  ctx.font = '11px system-ui, sans-serif';
+  const labelW = Math.max(ctx.measureText(yMaxLabel).width, ctx.measureText(yMinLabel).width);
+  const padLeft = Math.max(PAD, labelW + 12);
+  const plotW = w - padLeft - PAD;
+  const plotH = h - PAD * 2;
+
+  const x = (t) => padLeft + ((t - t0) / (t1 - t0 || 1)) * plotW;
+  const y = (v) => PAD + (1 - (v - yMin) / (yMax - yMin || 1)) * plotH;
+
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padLeft, PAD, plotW, plotH);
+
+  // 0秒の破線(直近のアンカーの基準線)。
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padLeft, y(0));
+  ctx.lineTo(padLeft + plotW, y(0));
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = fg;
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(yMaxLabel, padLeft - 4, PAD + 4);
+  ctx.fillText(yMinLabel, padLeft - 4, PAD + plotH);
+  ctx.fillText('0ms', padLeft - 4, y(0) + 4);
+  ctx.textAlign = 'left';
+
+  // 横軸(時刻)の目盛。drawFreqChartと同じ考え方。
+  const tickCount = Math.max(2, Math.min(6, Math.floor(plotW / 80) + 1));
+  ctx.fillStyle = fg;
+  ctx.strokeStyle = line;
+  for (let i = 0; i < tickCount; i++) {
+    const t = t0 + ((t1 - t0) * i) / (tickCount - 1);
+    const px = x(t);
+    ctx.beginPath();
+    ctx.moveTo(px, PAD + plotH);
+    ctx.lineTo(px, PAD + plotH + 4);
+    ctx.stroke();
+    ctx.textAlign = i === 0 ? 'left' : i === tickCount - 1 ? 'right' : 'center';
+    ctx.fillText(formatClock(t), px, PAD + plotH + 16);
+  }
+  ctx.textAlign = 'left';
+
+  // 折れ線。null(PPS未ロック区間・アンカーが作り直された境界)をまたぐところは
+  // 線をつながない——アンカーが作り直されるたびに0へ仕切り直すので、繋ぐと
+  // 測っていない区間の偏差を捏造したことになる(→ docs/storage.md「セッションの扱い」)。
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let drawing = false;
+  for (let i = 0; i < n; i++) {
+    const v = teArr[i];
+    if (v == null) { drawing = false; continue; }
+    const px = x(series.t_us[i]);
+    const py = y(Math.min(Math.max(v, yMin), yMax));
+    if (!drawing) { ctx.moveTo(px, py); drawing = true; } else { ctx.lineTo(px, py); }
+  }
+  ctx.stroke();
+}
+
 // --- ステータス行・品質テーブル ---
 // deviceは生存台帳(/devices、→ docs/ota.md)の該当デバイス分。取得失敗時や
 // まだ生存台帳を立てていない環境ではnull——その場合はビルド版数等の行を
@@ -303,6 +398,12 @@ function renderStatus(series, device) {
     ['時間基準の確度(1σ)', latest.tb_residual_ns + 'ns/s'],
     ['SoC温度', latest.soc_temp_c + '℃'],
   ];
+  // PPSロック区間だけの値(→ docs/cloud.md「TE絶対値表示のアンカー」)。
+  // NOMINAL/NTP区間・アンカーがまだ無い区間ではnullなのでここでは行を出さない
+  // (「0ms」と誤解される方が「measured」と示さないより害が大きい)。
+  if (latest.te_seconds != null) {
+    rows.push(['系統時刻偏差(TE、直近アンカーから)', `${(latest.te_seconds * 1000).toFixed(1)}ms`]);
+  }
   // トランス二次側の実効値。v_rms_mvはワイヤフォーマット上の実測値そのもの
   // (→ docs/wire-format.md)なので、これ自体は概算扱いしない。壁側電圧(概算)は
   // 巻数比が暫定値・AFE換算も1点校正のみだが、常時2行並べて出す
@@ -358,6 +459,7 @@ async function refresh() {
     drawFreqChart(document.getElementById('freq-canvas'), series);
     const showWall = document.getElementById('show-wall-voltage').checked;
     drawVrmsChart(document.getElementById('vrms-canvas'), series, showWall);
+    drawTeChart(document.getElementById('te-canvas'), series);
     // 生存台帳(/devices)は補助情報。取得できなくても(まだ立てていない環境・
     // 一時的な失敗)メインのグラフ・ステータス表示は妨げない。
     let device = null;

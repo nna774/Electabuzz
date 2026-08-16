@@ -1,4 +1,4 @@
-# TE絶対値表示・欠測区間可視化の仕様を決めた（未実装）
+# TE絶対値表示・欠測区間可視化の仕様を決め、TE絶対値表示を実装した
 
 ## 経緯
 
@@ -128,8 +128,34 @@ reboot_watch・OTA・生存台帳が依存しているため、そこに手を�
     1パス走査でマージしてTEを計算する
   - NTPロック時点での帯付きTE表示は`docs/open-questions.md`へ送り、v1では実装しない
 
-## 次に何が可能になったか
+## 実装した
 
-実装(terraform新テーブル・`lambda/ingest/handler.py`・`lambda/api/handler.py`・
-`dashboard/`・テスト)に進める。**`terraform apply`は課金操作なので別途許可が要る。**
-欠測区間の可視化はTEと依存関係が無いので、並行または先行して着手できる。
+上記の仕様どおりに実装した。**`terraform apply`はまだ実行していない**(課金が
+生じるリソース作成のため別途許可が要る)。
+
+- `lambda/wire_gridfreq.py`: `Header.is_pps_disciplined`プロパティを追加
+  (`timebase_source`がPPS/PPS_NTPかどうか)
+- `lambda/common/te_anchors.py`: 新規。`open_run_if_needed`/`close_open_run`
+  (書き込み、ingestが呼ぶ)・`anchors_for_session`(読み込み、apiが呼ぶ)。
+  `grid_events.py`と同じ「hash_keyのみ・scanで足りる」流儀
+- `lambda/ingest/handler.py`: `_record_te_anchor()`を追加。discontinuity/
+  power_failが立っていたら開いているrunを閉じる、PPS規正済みかつsuspectで
+  なければ(開いているrunが無い時だけ)新規に開く
+- `lambda/api/handler.py`: `_series_payload()`にTE計算を追加。device×session
+  ごとにアンカーをまとめて取得し(`_load_te_anchors`)、時刻順1パス走査に
+  アンカーへのポインタを1本足してマージする。discontinuityに加えて
+  **power_failもTE計算のsuspect判定に含める**(freq_hzの既存suspect判定は
+  discontinuityのみで変更していない——今回の変更はTE計算に閉じる)。
+  レスポンスへ`te_seconds`配列・`latest.te_seconds`を追加
+- `terraform/te_anchors.tf`: 新規DynamoDBテーブル`${local.name}-te-anchors`
+  (`events`テーブルと同じ形)。`terraform/iam.tf`・`terraform/main.tf`に
+  IAM権限・環境変数(`ELBZ_TE_ANCHORS_TABLE`)を配線
+- `dashboard/`: `drawTeChart()`を追加、`te-canvas`を新設。0秒の破線・
+  PPS区間のみ描画・アンカー境界でのライン分断を実装。品質テーブルに
+  「系統時刻偏差(TE、直近アンカーから)」行を追加
+- テスト: `lambda/tests/test_te_anchors.py`(新規、`anchor_id`の純粋関数のみ。
+  DynamoDBに触る関数はgrid_events.pyと同じ方針でテスト対象から外した)、
+  `test_ingest.py`・`test_api.py`にそれぞれケースを追加。lambda全体で
+  141件パス、`terraform validate`・`build_lambda.sh`とも緑
+- 欠測区間の可視化(dashboard単独、TEと依存無し)は今回のスコープに含めず、
+  次のタスクとして残した

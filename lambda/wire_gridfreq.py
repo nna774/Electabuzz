@@ -110,6 +110,17 @@ class Header:
         )
 
     @property
+    def is_pps_disciplined(self) -> bool:
+        """PPS由来の規正か(NTP単独は含まない)。
+
+        TE絶対値表示のアンカー(→ docs/cloud.md「TE絶対値表示のアンカー」)はv1では
+        PPS限定にする——NTPロック(600秒)よりPPSロック(30秒)の方が実運用では
+        先に来ることが多く、NTP限定の状態が長く続かない見込みが高いため
+        (→ docs/log/2026-08-17-te-absolute-display-design.md)。
+        """
+        return self.timebase_source in (TimebaseSource.PPS, TimebaseSource.PPS_NTP)
+
+    @property
     def f_nominal_hz(self) -> float:
         return self.f_nominal_mhz / 1000.0
 

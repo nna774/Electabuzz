@@ -61,8 +61,7 @@
     <canvas id="freq-canvas"></canvas>
     <p class="muted">縦軸: 系統周波数[Hz]。灰色の破線は公称値(50/60Hz)。データが途切れている区間は
       線をつながない（フェーズ2はPPSロック・クラウドへの`PPS_NTP`品質データ着弾・
-      27時間超soakでの安定性まで確認済みでクローズ済み。時刻偏差の絶対値の表示機能
-      自体はまだ実装していない）。
+      27時間超soakでの安定性まで確認済みでクローズ済み）。
       起動直後〜NTP規正(約10分)までは
       <span style="color:var(--nominal)">点線(未規正・生の値)</span>で描き、規正が済むと
       <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
@@ -72,6 +71,14 @@
     <p class="muted" id="vrms-caption">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。
       上のチェックボックスで壁側電圧(概算)表示に切り替えられる。線が途切れている区間は
       <code>v_rms_mv</code>未対応のファーム時代のレコード(常に0)であることを示す。</p>
+
+    <canvas id="te-canvas"></canvas>
+    <p class="muted">縦軸: 系統時刻偏差(TE)[ms]。<strong>PPSロック区間のみ表示する</strong>
+      (NOMINAL/NTP限定の区間は描かない、→ docs/timebase.md)。0msの破線は直近の
+      アンカー（PPSロック開始、または断線復帰後の再ロック）の基準点——アンカーが
+      作り直されるたびに線が途切れ、そこから0msへ仕切り直す。1本の連続した
+      「本当の系統時計オフセット」ではなく、「直近のアンカー以降どれだけ動いたか」
+      を示す値であることに注意。</p>
 
     <table id="quality-table">
       <tbody></tbody>

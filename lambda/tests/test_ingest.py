@@ -16,6 +16,7 @@ import pytest
 
 import wire_gridfreq
 from conftest import GOLDEN_PATH, load_handler, load_hex
+from test_wire_gridfreq import build
 
 SECRET = "test-secret"
 DEVICE = "2"  # golden の device_id と一致させてある
@@ -81,6 +82,13 @@ def with_power_fail(raw: bytes) -> bytes:
     ヘッダのflagsを書き換えてもCRCは壊れない。"""
     b = bytearray(raw)
     b[52] |= int(wire_gridfreq.BatchFlag.POWER_FAIL)
+    return bytes(b)
+
+
+def with_discontinuity(raw: bytes) -> bytes:
+    """flags(offset 52, u16 LE)のdiscontinuityビットを立てる。with_power_failと同じ理屈。"""
+    b = bytearray(raw)
+    b[52] |= int(wire_gridfreq.BatchFlag.DISCONTINUITY)
     return bytes(b)
 
 
@@ -405,6 +413,73 @@ def test_mute_clear_skipped_when_table_unset(h, golden, monkeypatch):
     monkeypatch.setattr(h.watchdog_mute, "clear_mute", lambda did: calls.append(did))
     assert h.handler(make_event(golden), None)["statusCode"] == 200
     assert calls == []
+
+
+# --- TEアンカー(→ docs/cloud.md「TE絶対値表示のアンカー」) --------------------
+# golden fixtureはtimebase_source=PPS・session_id=7・device_id=2、flagsは
+# pps_locked|gnss_fixのみ(discontinuity/power_fail無し) → 「クリーンなPPSバッチ」。
+
+def test_te_anchor_opened_for_clean_pps_batch_when_table_set(h, golden, monkeypatch):
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    opened = []
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed",
+                        lambda *a, **k: opened.append((a, k)))
+    monkeypatch.setattr(h.te_anchors, "close_open_run", lambda *a, **k: pytest.fail("呼ばれないはず"))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    (args, kw), = opened
+    assert args == (2, 7)  # device_id, session_id
+    assert kw["t0_us"] == 1750000000123456  # batch_start_us(先頭レコード=バッチ起点)
+    assert kw["cycles0"] == pytest.approx(0.0)  # goldenの先頭レコードのcycles
+
+
+def test_te_anchor_skipped_when_table_unset(h, golden, monkeypatch):
+    opened = []
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed", lambda *a, **k: opened.append(a))
+    assert h.handler(make_event(golden), None)["statusCode"] == 200
+    assert opened == []
+
+
+def test_te_anchor_not_opened_for_non_pps_source(h, monkeypatch):
+    """NTP規正済みでもPPSでなければアンカーを開かない(v1はPPS限定、→ docs/timebase.md)。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    opened = []
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed", lambda *a, **k: opened.append(a))
+    monkeypatch.setattr(h.te_anchors, "close_open_run", lambda *a, **k: None)
+    raw = build(device_id=2, session_id=7, source=int(wire_gridfreq.TimebaseSource.NTP))
+    assert h.handler(make_event(raw), None)["statusCode"] == 200
+    assert opened == []
+
+
+def test_te_anchor_run_closed_on_power_fail(h, golden, monkeypatch):
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    closed = []
+    monkeypatch.setattr(h.te_anchors, "close_open_run", lambda *a: closed.append(a))
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed",
+                        lambda *a, **k: pytest.fail("power_fail中は開かないはず"))
+    assert h.handler(make_event(with_power_fail(golden)), None)["statusCode"] == 200
+    assert closed == [(2, 7)]
+
+
+def test_te_anchor_run_closed_on_discontinuity(h, golden, monkeypatch):
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    closed = []
+    monkeypatch.setattr(h.te_anchors, "close_open_run", lambda *a: closed.append(a))
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed",
+                        lambda *a, **k: pytest.fail("discontinuity中は開かないはず"))
+    assert h.handler(make_event(with_discontinuity(golden)), None)["statusCode"] == 200
+    assert closed == [(2, 7)]
+
+
+def test_te_anchor_failure_does_not_fail_the_batch(h, golden, monkeypatch):
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+
+    def boom(*a, **k):
+        raise RuntimeError("dynamodb down")
+
+    monkeypatch.setattr(h.te_anchors, "open_run_if_needed", boom)
+    r = h.handler(make_event(golden), None)
+    assert r["statusCode"] == 200
+    assert len(h._S3.puts) == 1
 
 
 def test_telemetry_headers_are_logged_not_stored(h, golden, capsys):
