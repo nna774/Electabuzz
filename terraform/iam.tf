@@ -51,6 +51,20 @@ data "aws_iam_policy_document" "lambda" {
     ]
     resources = [aws_dynamodb_table.devices.arn]
   }
+
+  # detectイベント台帳(→ events.tf)。detectが書く(grid_events.record)、
+  # apiが読む(/events・grid_events.recent_events)。
+  statement {
+    sid    = "Events"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Scan",
+    ]
+    resources = [aws_dynamodb_table.events.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {

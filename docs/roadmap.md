@@ -98,8 +98,8 @@
    新バケット・IAMロール・Lambda・Function URL。state は Namazu と同じ保存先バケットの
    別key([versions.tf](../terraform/versions.tf))で独立。**`apply`済みで`ingest_url`が
    出ている**（→ [log/2026-08-07-terraform-apply-and-secrets.md](log/2026-08-07-terraform-apply-and-secrets.md)）。
-   **detect・rollup・watchdog はまだ**——対応する Lambda 本体が無いので、
-   先に terraform だけ書くと死んだリソース定義になる。
+   **detect・watchdogは後続フェーズで完了・rollupはまだ**——対応する Lambda 本体が
+   無いうちは、先に terraform だけ書くと死んだリソース定義になる。
    **NamazuHaUrokoGaNai の `terraform/` には一切 apply しない**
 8. ~~**ダッシュボード**~~ **v1 完了(2026-08-07)** — `lambda/api/`(`/recent`のみ)・
    `dashboard/`(vanilla JS + Canvas、外部依存なし)・`terraform/dashboard.tf`
@@ -110,8 +110,10 @@
    **完了(2026-08-16)** — Namazuの`lambda/watchdog/`を踏襲し、Electabuzz固有の
    AC入力断(`kGfrqFlagPowerFail`)・再起動検知を追加した(→
    [log/2026-08-16-watchdog-implementation.md](log/2026-08-16-watchdog-implementation.md))。
-   **detect(周波数逸脱・RoCoF・電圧異常の確定判定)と、バッテリー給電・停電時の挙動は
-   まだ**
+   ~~**detect(周波数逸脱・RoCoF・電圧異常の確定判定)**~~ **実装完了(2026-08-17、
+   terraform applyはまだ)** — `lambda/detect/`(→[cloud.md](cloud.md)「detect」、
+   [log/2026-08-17-detect-gridfreq-v1.md](log/2026-08-17-detect-gridfreq-v1.md))。
+   **バッテリー給電・停電時の挙動はまだ**
 
 > フェーズ4(切り出し)はハードウェアを必要としないので、**部品の到着を待つ間に
 > 進めておける。** そして切り出しが v1.0.0 として固まっていないと、

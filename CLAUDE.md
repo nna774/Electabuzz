@@ -8,6 +8,8 @@
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16、欠測・データ遅延・AC入力断・再起動検知・pull型OTA停滞の5項目を
 Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っている）。
+**detect(周波数逸脱・RoCoF・電圧異常の確定判定、フェーズ9)は実装完了した**
+（2026-08-17、`terraform apply`はまだ → [docs/log/2026-08-17-detect-gridfreq-v1.md](docs/log/2026-08-17-detect-gridfreq-v1.md)）。
 
 このファイルは**ハブであって仕様ではない**。実体は各ドキュメントにある。
 必要なノードまでリンクを辿れ。全部読む必要はない。
@@ -44,7 +46,9 @@ Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っ�
 [docs/log/2026-08-17-phase2-soak-confirmation.md](docs/log/2026-08-17-phase2-soak-confirmation.md)）。
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16 → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
-detect(周波数逸脱の確定判定)は引き続き未着手。
+**detect(周波数逸脱・RoCoF・電圧異常の確定判定、フェーズ9)は実装完了した**
+（2026-08-17、`terraform apply`はまだ → [docs/log/2026-08-17-detect-gridfreq-v1.md](docs/log/2026-08-17-detect-gridfreq-v1.md)）。
+rollupは引き続き未着手。
 
 - **時間基準**: `firmware/lib/Timebase/`（`NtpTimebase`）で `fs` 実測が完了、
   リスク10解消（水晶は **+3.8873 ppm**、`fs` との差分は分周器由来で一定 →
@@ -111,15 +115,25 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 を新規に書き実測——直近の再起動以降27.8時間・再起動ゼロ・ソース後退ゼロ・欠測ギャップ
 ゼロでロック率100.0% → [docs/log/2026-08-17-phase2-soak-confirmation.md](docs/log/2026-08-17-phase2-soak-confirmation.md)）。
 
-**次の一手**: detect(フェーズ9の残り、周波数逸脱の確定判定)。あるいは時刻偏差(TE)の
-絶対値表示・欠測区間の可視化(PPSデータが安定して出ている今、着手可能)。
+**detect(周波数逸脱・RoCoF・電圧異常の確定判定、フェーズ9)は実装完了した**
+（2026-08-17、`lambda/detect/`・`lambda/common/grid_detect.py`(純粋関数)・
+`lambda/common/grid_events.py`(DynamoDBセッション管理)・`/events` API・
+terraform(events.tf・detect Lambda・S3トリガー)一式。テスト21件追加、
+`terraform validate`・4本(ingest/api/watchdog/detect)のビルドとも緑。
+**`terraform apply`はまだ実行していない**（費用が生じる操作なので明示の許可が
+要る）。しきい値は`docs/cloud.md`の目安をそのまま既定にした未校正値
+→ [docs/log/2026-08-17-detect-gridfreq-v1.md](docs/log/2026-08-17-detect-gridfreq-v1.md)）。
+
+**次の一手**: 上記detectの`terraform apply`(許可が要る)と、実機イベントでの
+しきい値校正。あるいは時刻偏差(TE)の絶対値表示・欠測区間の可視化(PPSデータが
+安定して出ている今、着手可能)。
 **OTA(pull型)は実装・実機実クラウド確認とも完了済み**（2026-08-15、
 `v_rms_mv`配線を含む最新ビルドで配信全経路(`publish_ota.sh`→
 `request_ota.py`→DynamoDB→取得→書き込み→再起動→台帳自動解放)を実機で確認
 → [docs/ota.md](docs/ota.md)、[docs/log/2026-08-15-vrms-mv-ota-live-verification.md](docs/log/2026-08-15-vrms-mv-ota-live-verification.md)）。
 **watchdog(フェーズ9)は`apply`・実クラウド確認まで完了**（2026-08-16、残るのは
 AC入力線を実際に抜く等の異常系確認だけ → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
-detect・rollup 用の terraform は対応する Lambda がまだ無いので書いていない。
+rollup 用の terraform は対応する Lambda がまだ無いので書いていない。
 
 ## 3. 絶対に破ってはいけない不変条件
 

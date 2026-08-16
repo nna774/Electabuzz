@@ -2,13 +2,14 @@
 
 Lambda Function URL (payload v2.0)。Namazu の
 [api/handler.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/api/handler.py)
-と同じ役回りだが、Electabuzz には detect/events がまだ無いので
-`/recent`・`/devices`だけを持つ（→ docs/cloud.md, docs/roadmap.md フェーズ8/9）。
+と同じ役回り。`/recent`・`/devices`・`/events`(→ detect、docs/cloud.md)を持つ。
 
     GET /recent?minutes=5&start=<us>   直近N分（既定5、上限 MAX_RECENT_MINUTES）の
                                         瞬時周波数の時系列。start指定で[start-minutes,start]
     GET /devices                       生存台帳(→ docs/ota.md)の一覧。ビルド版数・
                                         最終受信時刻・pull型OTAの配信対象を返す
+    GET /events                        detectが確定した周波数逸脱・RoCoF・電圧異常の
+                                        一覧(→ lambda/detect/handler.py)
 
 "latest"（系列の末尾点）に時間基準の品質（timebase_source・fs_measured_hz・
 tb_residual_ns）を載せる。これがダッシュボードの「今の状態」表示の主で、
@@ -29,6 +30,7 @@ from batch_uplink import devices
 
 import store_gridfreq
 import wire_gridfreq
+from common import grid_events
 
 _S3 = None
 
@@ -64,6 +66,8 @@ def handler(event, context):
             return _recent(q)
         if path.endswith("/devices"):
             return _devices()
+        if path.endswith("/events"):
+            return _events(q)
         return _json(404, {"error": "not found"})
     except Exception as e:  # noqa: BLE001
         print(f"api error: {e!r}")
@@ -89,6 +93,36 @@ def _devices():
             "pending_ota_version": it.get("pending_ota_version"),
         })
     return _json(200, {"devices": out})
+
+
+# /events のlimit上限。無いと巨大値でDynamoDB scanを暴走させる(認証なし公開のため)。
+MAX_EVENTS_LIMIT = 200
+
+
+def _events(q):
+    """detectが確定したイベント(→ lambda/detect/handler.py)の一覧。
+
+    NAMZ_EVENTS_TABLE未設定なら空配列(/devicesと同じ、まだ立てていない環境向け)。
+    """
+    if not os.environ.get("NAMZ_EVENTS_TABLE"):
+        return _json(200, {"events": []})
+    try:
+        limit = int(q.get("limit", "50"))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, MAX_EVENTS_LIMIT))
+
+    out = []
+    for it in grid_events.recent_events(limit):
+        out.append({
+            "event_id": it.get("event_id"),
+            "device_id": int(it.get("device_id", 0)),
+            "event_type": it.get("event_type"),
+            "onset_us": int(it.get("onset_us", 0)),
+            "last_us": int(it.get("last_us", 0)),
+            "peak_value": float(it.get("peak_value", 0)),
+        })
+    return _json(200, {"events": out})
 
 
 def _recent(q):

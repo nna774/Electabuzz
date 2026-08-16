@@ -84,3 +84,28 @@ resource "aws_lambda_function_url" "api" {
     allow_methods = ["GET"]
   }
 }
+
+# --- detect（series/への新規バッチ到着ごとに周波数逸脱・RoCoF・電圧異常を確定判定。
+# → docs/cloud.md「detect」）---
+resource "aws_lambda_function" "detect" {
+  function_name    = "${local.name}-detect"
+  role             = aws_iam_role.lambda.arn
+  handler          = "handler.handler"
+  runtime          = "python3.12"
+  filename         = "${local.build_dir}/detect.zip"
+  source_code_hash = try(filebase64sha256("${local.build_dir}/detect.zip"), null)
+  timeout          = 30
+  memory_size      = 256
+
+  environment {
+    variables = local.detect_env
+  }
+}
+
+resource "aws_lambda_permission" "detect_from_s3" {
+  statement_id  = "AllowS3Invoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.detect.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.data.arn
+}

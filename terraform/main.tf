@@ -18,10 +18,28 @@ locals {
   }, local.device_secret_env)
 
   # api は読み取り専用・認証なしなので HMAC 鍵は要らない。
-  # NAMZ_DEVICES_TABLE は /devices の読み取り(devices.list_devices/get_device)に使う。
+  # NAMZ_DEVICES_TABLE は /devices の読み取り(devices.list_devices/get_device)に、
+  # NAMZ_EVENTS_TABLE は /events の読み取り(grid_events.recent_events)に使う。
   api_env = {
     ELBZ_BUCKET        = local.data_bucket
     NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
+    NAMZ_EVENTS_TABLE  = aws_dynamodb_table.events.name
+  }
+
+  # detect は series/ を読み(境界レコードの補完取得)、events/台帳へ書く。
+  # Slack設定はwatchdogと同じ値を渡す(→ docs/cloud.md「detect」)。
+  detect_env = {
+    ELBZ_BUCKET                   = local.data_bucket
+    NAMZ_EVENTS_TABLE             = aws_dynamodb_table.events.name
+    ELBZ_FREQ_DEV_THRESHOLD_HZ    = tostring(var.freq_deviation_threshold_hz)
+    ELBZ_FREQ_DEV_HOLD_RECORDS    = tostring(var.freq_deviation_hold_records)
+    ELBZ_ROCOF_THRESHOLD_HZ_PER_S = tostring(var.rocof_threshold_hz_per_s)
+    ELBZ_VOLTAGE_DEV_FRACTION     = tostring(var.voltage_deviation_fraction)
+    ELBZ_VOLTAGE_DEV_HOLD_RECORDS = tostring(var.voltage_deviation_hold_records)
+    ELBZ_NOMINAL_V_RMS_MV         = tostring(var.nominal_v_rms_mv)
+    NAMZ_SLACK_WEBHOOK_URL        = var.slack_webhook_url
+    NAMZ_SLACK_CHANNEL            = var.slack_channel
+    NAMZ_SLACK_MENTION            = var.slack_mention
   }
 
   # watchdog はS3を触らないのでELBZ_BUCKETは要らない。しきい値・Slack設定・

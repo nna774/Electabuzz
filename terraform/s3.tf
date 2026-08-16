@@ -81,3 +81,17 @@ resource "aws_s3_bucket_policy" "data" {
   bucket = aws_s3_bucket.data.id
   policy = data.aws_iam_policy_document.data_bucket_protect_series.json
 }
+
+# series/にオブジェクトが作られたらdetect Lambdaを起動する(Namazuのraw/トリガーと
+# 同じ構成)。ingestが書く場所(series/)がそのままdetectの入力になる。
+resource "aws_s3_bucket_notification" "series_created" {
+  bucket = aws_s3_bucket.data.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.detect.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "series/"
+  }
+
+  depends_on = [aws_lambda_permission.detect_from_s3]
+}
