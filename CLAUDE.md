@@ -4,6 +4,9 @@
 常時測る装置。設置先は 50Hz 地域（東日本）。**実機1台が稼働中で、系統周波数の
 ダッシュボードも公開済み**（→ 2章）。**フェーズ2(PPS)は実配線・初回ロック成功済み**
 （2026-08-15、残差30ns/s）——soak確認とクラウド着弾確認が残っている。
+**watchdog Lambda(フェーズ9)はコード側完了**（2026-08-16、欠測・データ遅延・
+AC入力断・再起動検知・pull型OTA停滞の5項目をSlack通知——`terraform apply`と
+実機での動作確認が残っている）。
 
 このファイルは**ハブであって仕様ではない**。実体は各ドキュメントにある。
 必要なノードまでリンクを辿れ。全部読む必要はない。
@@ -36,7 +39,9 @@
 実配線・初回ロックに成功した**（2026-08-15、残差30ns/sのppb級。設計全体の成否を
 決める本丸が実測で通った → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
 残るのはsoak確認・クラウド着弾確認・GNSS UART側のfixフラグ不具合調査。
-その先にdetect(フェーズ9)。
+**watchdog Lambda(フェーズ9)は欠測監視部分がコード側完了**（2026-08-16 →
+[docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
+detect(周波数逸脱の確定判定)は引き続き未着手。
 
 - **時間基準**: `firmware/lib/Timebase/`（`NtpTimebase`）で `fs` 実測が完了、
   リスク10解消（水晶は **+3.8873 ppm**、`fs` との差分は分周器由来で一定 →
@@ -50,16 +55,18 @@
 - **実機**: `env:record`ビルドモードを焼き、`fs`がNTPで規正できてからGoertzelを
   起動、`timebase_source=NTP`と正直に申告してGFRQバッチを`Uploader`で送信。
   **実際に`ingest`まで届き、`series/`に着弾することを確認済み**
-- **クラウド**: `lambda/ingest/`（受信）+ `lambda/api/`（`/recent`のみ。
-  detect/生存台帳が無いので`/events`・`/devices`は無い）。送信基盤は
+- **クラウド**: `lambda/ingest/`（受信）+ `lambda/api/`（`/recent`・`/devices`）+
+  `lambda/watchdog/`（2026-08-16新規。欠測監視、→下記）。detectが無いので`/events`は無い。
+  送信基盤は
   [batch-uplink](https://github.com/nna774/batch-uplink) **v2.12.0**
   （2026-08-11、TLSハンドシェイクタイムアウト短縮・CA証明書ピン留め・spillの
   破損隔離(`discardSpillOn400`)を取り込むため追従。`v2.0.0`のヘッダ配列
   nullptr終端化に伴い呼び出し側`main.cpp`も書き換え済み。実機投入はまだ
   → [docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md](docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md)）
-- **`terraform/`**: ingest + api + dashboard 分を書いて **`apply`済み**。
-  state はNamazuと同じ保存先バケットの別keyで独立。detect/rollup/watchdogは
-  対応するLambdaが無いのでまだ書いていない
+- **`terraform/`**: ingest + api + dashboard 分は **`apply`済み**。
+  state はNamazuと同じ保存先バケットの別keyで独立。**watchdog分は書いたが
+  まだ`apply`していない**（2026-08-16、費用が生じる操作なので明示の許可が要る）。
+  detect/rollupは対応するLambdaが無いのでまだ書いていない
 - **ダッシュボード**: `dashboard/`（vanilla JS + Canvas、外部依存なし）。
   瞬時周波数と時間基準の品質(`timebase_source`等)を表示。実データで動作確認済み
   （→ [docs/log/2026-08-07-dashboard-v1.md](docs/log/2026-08-07-dashboard-v1.md)）
@@ -103,8 +110,9 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 `v_rms_mv`配線を含む最新ビルドで配信全経路(`publish_ota.sh`→
 `request_ota.py`→DynamoDB→取得→書き込み→再起動→台帳自動解放)を実機で確認
 → [docs/ota.md](docs/ota.md)、[docs/log/2026-08-15-vrms-mv-ota-live-verification.md](docs/log/2026-08-15-vrms-mv-ota-live-verification.md)）。
-detect・rollup・watchdog 用の terraform は対応する Lambda がまだ無いので
-書いていない（フェーズ9）。
+**watchdog(フェーズ9)はコード側完了・`apply`とその後の実機確認が次の一手**
+（2026-08-16 → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
+detect・rollup 用の terraform は対応する Lambda がまだ無いので書いていない。
 
 ## 3. 絶対に破ってはいけない不変条件
 
