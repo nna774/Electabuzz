@@ -161,6 +161,7 @@ detect・rollup 用の terraform は対応する Lambda がまだ無いので書
 | `GFRQ` v1 のヘッダとレコード定義 | [docs/wire-format.md](docs/wire-format.md) |
 | 累積位相を第一級データにする理由 / retention / ロールアップ | [docs/storage.md](docs/storage.md) |
 | ingest の実装の契約（応答コードと置き先・CRC不一致の隔離・環境変数） / detect / rollup | [docs/cloud.md](docs/cloud.md) |
+| S3の`series/`を直接取ってきて解析するときのキャッシュ運用（`.s3cache/`必須） | [tools/README.md](tools/README.md) |
 | OTA(pull型)の設計・NVS化・トリガー(バッチ送信便乗)・テレメトリヘッダ | [docs/ota.md](docs/ota.md) |
 | 共通ライブラリの切り出し / 流用境界の実測 / タグ pin / レポジトリ配置 | [docs/batch-uplink.md](docs/batch-uplink.md) |
 | 絶対確度をどう担保するか / 先行実装との外部照合 | [docs/verification.md](docs/verification.md) |
