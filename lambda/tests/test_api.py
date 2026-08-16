@@ -318,3 +318,44 @@ def test_devices_omits_optional_fields_when_absent(h, monkeypatch):
     assert d["fw_version"] is None
     assert d["pending_ota_version"] is None
     assert d["last_batch_start_us"] is None
+
+
+# --- /events(detectが確定したイベント。→ lambda/detect/handler.py) ---------
+
+def test_events_empty_when_table_unset(h):
+    """テーブル未設定(NAMZ_EVENTS_TABLE無し)なら空配列(まだ立てていない環境向け)。"""
+    resp = h.handler(make_event("/events"), None)
+    assert resp["statusCode"] == 200
+    import json
+    assert json.loads(resp["body"]) == {"events": []}
+
+
+def test_events_lists_from_table(h, monkeypatch):
+    from decimal import Decimal
+    monkeypatch.setenv("NAMZ_EVENTS_TABLE", "electabuzz-events")
+    monkeypatch.setattr(h.grid_events, "recent_events", lambda limit: [
+        {"event_id": "0001-freq_deviation-100", "device_id": 1, "event_type": "freq_deviation",
+         "onset_us": 1_750_000_000_000_000, "last_us": 1_750_000_003_000_000,
+         "peak_value": Decimal("0.3")},
+    ])
+    resp = h.handler(make_event("/events"), None)
+    assert resp["statusCode"] == 200
+    import json
+    e, = json.loads(resp["body"])["events"]
+    assert e["device_id"] == 1
+    assert e["event_type"] == "freq_deviation"
+    assert e["peak_value"] == 0.3
+
+
+def test_events_limit_is_clamped(h, monkeypatch):
+    monkeypatch.setenv("NAMZ_EVENTS_TABLE", "electabuzz-events")
+    seen = {}
+
+    def _fake_recent(limit):
+        seen["limit"] = limit
+        return []
+
+    monkeypatch.setattr(h.grid_events, "recent_events", _fake_recent)
+    for raw, expect in (("99999", h.MAX_EVENTS_LIMIT), ("-5", 1), ("not-a-number", 50)):
+        h.handler(make_event("/events", {"limit": raw}), None)
+        assert seen["limit"] == expect

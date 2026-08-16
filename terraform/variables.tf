@@ -104,3 +104,41 @@ variable "watchdog_schedule" {
   default     = "rate(5 minutes)"
   description = "欠測監視watchdogの起動間隔（EventBridge schedule expression）。通知の遅れ ≒ 欠測しきい値 + この間隔。どの頻度でも無料枠に収まるので、遅さの許容度で決める。"
 }
+
+# --- detect（周波数逸脱・RoCoF・電圧異常の確定判定。→ docs/cloud.md「detect」） ---
+
+variable "freq_deviation_threshold_hz" {
+  type        = number
+  default     = 0.1
+  description = "|f - f_nominal|がこの値[Hz]を超えた状態がfreq_deviation_hold_records件連続したら周波数逸脱として確定する。docs/cloud.mdの目安(100mHz)をそのまま既定にした未校正値。"
+}
+
+variable "freq_deviation_hold_records" {
+  type        = number
+  default     = 3
+  description = "周波数逸脱の連続run検出のhold件数(1レコード=1秒)。単発のノイズで確定させないための最小継続時間。"
+}
+
+variable "rocof_threshold_hz_per_s" {
+  type        = number
+  default     = 0.2
+  description = "隣接レコード間の|df/dt|がこの値[Hz/s]を超えたら単発でRoCoF逸脱として確定する(継続判定は無い。それ自体が変化率の測定のため)。docs/cloud.mdの目安(200mHz/s)をそのまま既定にした未校正値。"
+}
+
+variable "voltage_deviation_fraction" {
+  type        = number
+  default     = 0.1
+  description = "|v_rms - nominal_v_rms_mv| / nominal_v_rms_mvがこの比率を超えた状態がvoltage_deviation_hold_records件連続したら電圧異常として確定する。docs/cloud.mdの目安(±10%)をそのまま既定にした未校正値。AC入力断(power_fail)中は評価しない。"
+}
+
+variable "voltage_deviation_hold_records" {
+  type        = number
+  default     = 3
+  description = "電圧異常の連続run検出のhold件数(1レコード=1秒)。"
+}
+
+variable "nominal_v_rms_mv" {
+  type        = number
+  default     = 10300
+  description = "電圧異常判定の基準点[mV]。docs/hardware.mdの実測値(AC100V入力時のトランス二次側実効値)。AFE換算(v_rms_mv)は1点校正のみの暫定値なので、この閾値も暫定——実測で校正すること。"
+}

@@ -83,10 +83,11 @@ GFRQのバッチは30秒に1本しか増えないので、これは鮮度を犠�
 `terraform output api_url`(CloudFront経由)を使う。生のFunction URLは
 `api_url_direct`として切り分け用に残っている。
 
-**detect/rollup/生存台帳がまだ無いので、Namazuの`api`と違って`/events`・
-`/devices`は無い。** `/recent`の`latest`(系列末尾点)に`timebase_source`・
-`fs_measured_hz`・`tb_residual_ns`等の品質を載せており、ダッシュボードの
-「今の状態」表示と生存確認を兼ねる。
+**`/recent`・`/devices`(生存台帳)・`/events`(detectが確定したイベント。→本節末尾
+「detect_gridfreq」)を持つ。rollupがまだ無いので、Namazuの`api`と違って
+ロールアップ層の集計エンドポイントは無い。** `/recent`の`latest`(系列末尾点)に
+`timebase_source`・`fs_measured_hz`・`tb_residual_ns`等の品質を載せており、
+ダッシュボードの「今の状態」表示と生存確認を兼ねる。
 
 **`v_rms_mv`(トランス二次側の実効値[mV])も各点に`t_us`と並行な配列で返す**
 (2026-08-15)。`_series_payload()`はどのみち全レコードを舐めているので、
@@ -225,18 +226,56 @@ watchdog固有の閾値・Slack設定は`terraform/variables.tf`から
 折れ線と時間基準の品質を表示する。S3 + CloudFront(OAC)で配信し、カスタムドメインは
 無い(CloudFrontの既定ドメインで足りるうちは持ち込まない)。
 
-## 新規 detect_gridfreq / rollup
+## detect
 
-既存の状態機械を流用して判定だけ差し替える。
+**実装済み(v1): `lambda/detect/handler.py`**（テストは`lambda/tests/test_grid_detect.py`・
+`test_grid_events.py`・`test_detect_handler.py`。→ [log/2026-08-17-detect-gridfreq-v1.md](log/2026-08-17-detect-gridfreq-v1.md)）。
 
-| イベント | デバイス側即時 | cloud 確定 |
-|---|---|---|
-| 周波数逸脱 | \|f - f_nom\| > 100mHz が継続 | 前後波形と PPS 品質で確認 |
-| 急変(RoCoF) | \|df/dt\| > 200mHz/s | 同上 |
-| 電圧異常 | v_rms が公称 ±10% 外 | 同上 |
-| 停電・復電 | v_rms 急落/復帰 | 復電時の位相跳躍量を記録 |
-| 位相不連続 | unwrap 失敗・SNR低下 | 測定側異常として `artificial` |
+Namazuのdetect(地震の震度をFFT窓で再計算する)とは判定の性質が違う。GFRQは
+既に1Hzで瞬時周波数の元になる累積位相を運んでいるので、**窓の再解析が要らず、
+レコード単位のしきい値判定で足りる。** デバイス側の即時速報という段は無い
+(GFRQ自体がストリームなので、クラウド側だけで完結する判定にした)。
 
-`artificial` フラグが既存にあるのが効く。自宅のエアコン起動によるローカルな電圧変動と
-系統側事象を人が区別して記録できる。`tools/flag_event.py` もそのまま使える。
+- `series/`へのS3 ObjectCreatedで起動。直前バッチの最後の1レコードだけを追加
+  取得し、境界をまたぐ周波数計算の連続性を確保する(それより過去には遡らない
+  ——遡ると数十秒前に確定済みのrunを毎回再検知してSlackを埋める)
+- しきい値判定は`lambda/common/grid_detect.py`の純粋関数(`analyze`)に集約
+  (DynamoDB・Slackに触れずテストできる)
+
+| イベント | 判定 |
+|---|---|
+| 周波数逸脱(`freq_deviation`) | \|f - f_nom\| > 閾値(既定100mHz)が既定3レコード(≒3秒)連続 |
+| 急変(`rocof`) | 隣接レコード間の\|df/dt\| > 閾値(既定200mHz/s)。単発で確定(それ自体が変化率の測定のため、継続判定は無い) |
+| 電圧異常(`voltage_anomaly`) | \|v_rms - 基準点\| / 基準点 > 閾値(既定10%)が既定3レコード連続。AC入力断(`power_fail`)中は評価しない(→watchdogが別途通知するので二重に騒がない) |
+
+`f_nominal_mhz`が未判別(`0`)のバッチは周波数逸脱の判定をスキップする——
+測っていない基準を勝手に補って判定しない(→[wire-format.md](wire-format.md))。
+RoCoF・電圧異常はf_nominalに依存しないので影響しない。
+
+**採らなかった判定**（意図的に外した。Namazu由来の設計案には含まれていたが、
+理由があって見送っている）:
+
+- **停電・復電時の位相跳躍量の記録** — AC入力断(`kGfrqFlagPowerFail`)の
+  通知自体は既にwatchdogが担っている(→上記「watchdog」)。位相跳躍量の
+  記録は「復電前後の絶対位相をどう突き合わせるか」の定義が固まっていない
+  ので、detectの外に出したまま持ち込んでいない
+- **位相不連続・SNR低下を「測定側の異常(artificial)」として記録すること** —
+  GFRQの`DISCONTINUITY`フラグは既に`freq_hz`をnull化する形で系列側から
+  除外されており(→api節)、detectが別途イベントとして記録する実利が薄い
+
+イベントは`electabuzz-events`(DynamoDB、→[events.tf](../terraform/events.tf))に
+セッション方式(同一device×event_typeで、直近の活動から60秒以内のonsetは新規に
+せず延長)で記録する(`lambda/common/grid_events.py`。Namazuの`lambda/common/events.py`
+と同じセッションマージだが、デバイス速報とクラウド確定報の突合は無い——単一段の
+判定なので不要)。**新規セッションを作った時だけSlack通知する。** 継続中の延長を
+毎回通知すると同じ逸脱でSlackが埋まる。継続状況は`/events`の`last_us`で追える
+(watchdogのような定期再送は持たない)。
+
+しきい値は`terraform/variables.tf`の各`variable`(既定値は上表の通り)で調整できる。
+**いずれも未校正の暫定値**——実際の逸脱事例で妥当性を確認する作業がまだ残っている
+(→ [progress.md](progress.md))。
+
+## rollup
+
+未実装(→[roadmap.md](roadmap.md))。
 
