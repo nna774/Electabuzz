@@ -3,7 +3,8 @@
 商用電力の周波数と**系統時刻偏差**（グリッドの時計が標準時から何秒ずれているか）を
 常時測る装置。設置先は 50Hz 地域（東日本）。**実機1台が稼働中で、系統周波数の
 ダッシュボードも公開済み**（→ 2章）。**フェーズ2(PPS)は実配線・初回ロック成功済み**
-（2026-08-15、残差30ns/s）——soak確認とクラウド着弾確認が残っている。
+（2026-08-15、残差30ns/s）で、クラウドへの`PPS_NTP`品質データ着弾も確認済み
+（2026-08-17）——残るのは長時間soak確認のみ。
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16、欠測・データ遅延・AC入力断・再起動検知・pull型OTA停滞の5項目を
 Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っている）。
@@ -38,7 +39,8 @@ Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っ�
 確定** → [docs/gnss.md](docs/gnss.md)）。**フェーズ2(PPS同時サンプリング。方式A)は
 実配線・初回ロックに成功した**（2026-08-15、残差30ns/sのppb級。設計全体の成否を
 決める本丸が実測で通った → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
-残るのはsoak確認・クラウド着弾確認・GNSS UART側のfixフラグ不具合調査。
+GNSS UART側のfixフラグ不具合も特定・修正済み（→ 後述）、クラウドへの`PPS_NTP`品質
+データ着弾も確認済み（2026-08-17）。残るのは長時間soak確認のみ。
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16 → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
 detect(周波数逸脱の確定判定)は引き続き未着手。
@@ -101,8 +103,10 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 `kGfrqFlagGnssFix`が立たない不具合(`NmeaLineReader::lineLen()`が常に0を
 返すバグ)も特定・修正済み(2026-08-15、実機で`flags=0x0003`を確認
 → [docs/log/2026-08-15-nmea-line-reader-linelen-bug.md](docs/log/2026-08-15-nmea-line-reader-linelen-bug.md))。
-**次の一手**: ①数時間〜1日のsoakでロックの安定性を確認 ②クラウド(`series/`)に
-`timebase_source=PPS`のデータが着弾することを確認。
+クラウド(`series/`)に`timebase_source=PPS_NTP`のデータが着弾することも確認済み
+（2026-08-17、`/recent`・`/devices`を実機に対して直接curlして確認
+→ [docs/log/2026-08-17-dashboard-pps-caption-fix.md](docs/log/2026-08-17-dashboard-pps-caption-fix.md)）。
+**次の一手**: 数時間〜1日のsoakでロックの安定性を確認すること、これだけが残っている。
 
 それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
 （どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
