@@ -27,7 +27,10 @@
     .status-ng { color: #c0392b; font-weight: 600; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
-    td:first-child { color: #888; width: 40%; white-space: nowrap; }
+    /* quality-tableはkey/valueの2列なのでキー列だけ弱める。events-tableはどの列も
+       データなので対象外(#events-tableのtd:first-childには適用しない)。 */
+    #quality-table td:first-child { color: #888; width: 40%; white-space: nowrap; }
+    #events-table th { font-size: 12px; color: #888; }
     #api-settings { display: none; }
   </style>
 </head>
@@ -82,6 +85,16 @@
 
     <table id="quality-table">
       <tbody></tbody>
+    </table>
+
+    <h2 style="font-size:14px; margin: 24px 0 4px;">検知イベント</h2>
+    <!-- イベント数・種類が増えてページが縦に伸びすぎたら、Namazuのダッシュボード
+         (nna774/NamazuHaUrokoGaNai)のようにライブ/イベント/デバイスのタブ構成へ
+         切り替えることを検討する。今はイベント発生自体が稀で1ページに収まる量
+         なので、タブ化はまだしない(→ docs/log/2026-08-17-dashboard-events-section.md)。 -->
+    <table id="events-table">
+      <thead><tr><th>検知時刻</th><th>種類</th><th>ピーク値</th><th>継続</th></tr></thead>
+      <tbody><tr><td colspan="4" class="muted">読み込み中…</td></tr></tbody>
     </table>
   </main>
 
