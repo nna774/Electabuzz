@@ -136,6 +136,88 @@ NOMINAL区間かつ補正係数が求まっているレコードには
 補正値を出さない」形で守る。レスポンスには各点の`timebase_source`(文字列配列)
 も追加し、ダッシュボードが区間ごとに線種を変えられるようにしてある。
 
+## watchdog
+
+**実装済み: `lambda/watchdog/handler.py`**（テストは `lambda/tests/test_watchdog.py` 他）。
+Namazu(nna774/NamazuHaUrokoGaNai)の
+[lambda/watchdog/handler.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/watchdog/handler.py)
+を踏襲する。EventBridge(`var.watchdog_schedule`、既定5分おき)で定期起動し、
+生存台帳(`electabuzz-devices`)を見て異常をSlackへ通知する。
+
+不在（データが来ないこと）はイベント駆動では検知できないので、外から定期的に見る
+必要がある——これがwatchdogの存在理由そのもの。判定はどれも副作用のない純粋関数
+(`evaluate()`系)に集約してあり、DynamoDBに触れずテストできる（`batch_uplink.devices`
+と同じ設計）。
+
+### 見ている項目
+
+| 項目 | 判定 | 通知 | メンション |
+|---|---|---|---|
+| 欠測 | `NAMZ_OFFLINE_AFTER_S`(既定300秒)受信が途絶えた | 初回+`NAMZ_OFFLINE_RENOTIFY_S`ごと再送、復帰で1回 | あり |
+| データ遅延 | 受信は続くが測定時刻が`NAMZ_LAG_AFTER_S`(既定600秒)以上遅れた | 同上 | あり |
+| AC入力断 | バッチ`flags`の`power_fail`ビット(→ [wire-format.md](wire-format.md)) | 同上 | あり |
+| 再起動 | 稼働時間ヘッダからの逆算(`boot_epoch_us`)が前回watchdog観測値と変わった | 変化のたび1回のみ(再送なし) | なし |
+| pull型OTA停滞 | 許可(`pending_ota_version`)から`NAMZ_OTA_STUCK_AFTER_S`(既定1800秒)解消しない | 初回+再送 | なし |
+
+**欠測・データ遅延・AC入力断にはSlackメンション(`NAMZ_SLACK_MENTION`)を付ける。**
+見落とすと実害が大きい（実際に電源が来ていない・データが取れていない）ため
+——Namazuと同じ判断。再起動検知・OTA停滞は情報寄りなので付けない。
+
+**AC入力断は「線が抜けたのか停電したのか」を区別しない。** AFE単体の信号では
+原理的に区別できないと判明している(→ [open-questions.md](open-questions.md)、
+[risks.md](risks.md) リスク13)。「AC入力が見えない」で一本化し、原因の切り分けは
+人間が現地で行う。
+
+**欠測中はデータ遅延・AC入力断の評価を黙らせる**
+(`batch_uplink.devices.evaluate_lag`・`power_fail_watch.evaluate`とも同じガード)。
+データが来ていないのに古い状態だけで通知し続けるのを防ぐためで、欠測自体は別途
+「デバイス欠測」で通知される。
+
+**再起動検知だけ再送しない。** OTA・電源瞬断・WDTパニックいずれでも「起動した」
+という事実は1回しか起きないので、状態が変わるたびに1回だけ通知すれば足りる
+(`lambda/common/reboot_watch.py`)。`tools/request_ota.py`の手動許可を経ない再起動は
+異常の可能性がある。
+
+### 生存台帳への状態記録（ingest側）
+
+watchdogが読む状態は`lambda/ingest/handler.py`が毎バッチ書く。いずれも主経路では
+ない（失敗してもバッチ保存自体は成功扱い、→ ingest節の`_record_liveness`と同じ方針）:
+
+- `power_fail`(bool): `lambda/common/power_fail_watch.py`。バッチの`flags`を
+  そのまま反映するだけで、状態遷移の判定はwatchdog側に持つ
+- `boot_epoch_us`: `lambda/common/reboot_watch.py`。`X-Elbz-Uptime-Us`ヘッダから
+  `batch_start_us - uptime_us`を逆算し、前回値からTimeSyncのドリフト許容(±2分)を
+  超えてズレていたときだけ書く。**`X-Elbz-Reset-Reason`相当のヘッダはfirmware側が
+  未対応**なのでNamazuの`device_meta.py`と違い`reset_reason`は持たない
+- `watchdog_muted`の解除: バッチを受信するたび無条件で`REMOVE`する
+  (`lambda/common/watchdog_mute.py`)。mute中のデバイスから実際に送信が来た瞬間に
+  監視が復帰する
+
+### mute（退役・試験機を監視対象外にする）
+
+`lambda/common/watchdog_mute.py` + `tools/mute_device.py`（いずれもNamazuから
+移植）。実機は1台構成だが、将来の試験機(ハード試験のたびに繋いでは黙る機体)や
+退役に備えて同じ仕組みを持ち込んである。mute中はwatchdogが評価自体をスキップする
+——ingestがバッチを受信すれば自動でunmuteされるので、試験を再開するたびに
+手動でunmuteし直す必要はない。
+
+### 環境変数
+
+`NAMZ_`接頭辞のものは`batch_uplink`側にも同名の慣習があるものを踏襲(→ ingest節)。
+watchdog固有の閾値・Slack設定は`terraform/variables.tf`から
+`local.watchdog_env`(`terraform/main.tf`)経由で渡す。
+
+| 名前 | 用途 | 既定値 |
+|---|---|---|
+| `NAMZ_DEVICES_TABLE` | 生存台帳 | (必須) |
+| `NAMZ_OFFLINE_AFTER_S` / `NAMZ_OFFLINE_RENOTIFY_S` | 欠測しきい値/再送間隔 | 300 / 86400 |
+| `NAMZ_LAG_AFTER_S` / `NAMZ_LAG_RENOTIFY_S` | 遅延しきい値/再送間隔 | 600 / 86400 |
+| `NAMZ_POWER_FAIL_RENOTIFY_S` | AC入力断の再送間隔 | 86400 |
+| `NAMZ_OTA_STUCK_AFTER_S` / `NAMZ_OTA_STUCK_RENOTIFY_S` | OTA停滞しきい値/再送間隔 | 1800 / 86400 |
+| `NAMZ_SLACK_WEBHOOK_URL` / `NAMZ_SLACK_CHANNEL` | 通知先(`batch_uplink.notify`) | 空なら無通知(NullNotifier) |
+| `NAMZ_SLACK_MENTION` | 欠測・遅延・AC入力断に付けるメンション | Namazuと同じユーザーID |
+| `NAMZ_DASHBOARD_URL` | Slack通知内のデバイスリンク | CloudFrontドメイン |
+
 ## dashboard
 
 **実装済み: `dashboard/`**（v1。→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md)）。

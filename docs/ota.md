@@ -64,7 +64,7 @@ Electabuzzの実機も置く予定なので、push型を作るコストが実益
 | パーティション | `board_build.partitions = default_16MB.csv`（既定のまま、変更不要）。`nvs`(0x5000)・`otadata`(0x2000)・`app0`/`app1`(各0x640000=6.25MB)・`spiffs`(0x360000)を最初から持つOTA対応レイアウトだった |
 | 実装後のファームサイズ | `firmware.bin`(env:record)約987KB。スロット(6.25MB)の15.1%、余裕は十分 |
 | LittleFS(spiffs) | appパーティションとは別領域なので、OTAしても`/gfrq_spill`の退避バッチは消えない |
-| 失敗の検知 | **無い。** watchdog Lambda自体がまだ無い(→フェーズ9)。今は`tools/publish_ota.sh`実行者がシリアルログを見て確認する運用に留まる |
+| 失敗の検知 | **`lambda/watchdog/`の停滞検知(`lambda/common/ota_watch.py`)がある**（2026-08-16実装、→ [log/2026-08-16-watchdog-implementation.md](log/2026-08-16-watchdog-implementation.md)）。許可してから既定30分解消しなければSlack通知する。原因(証明書検証失敗・ネットワーク不調等)までは分からないので、詳細確認には引き続き`tools/publish_ota.sh`実行者がシリアルログを見る運用も残る |
 
 ## 3. トリガー: バッチ送信レスポンスへの便乗（デバイス生存台帳・DynamoDB）
 
@@ -102,12 +102,12 @@ watchdogを立てた時に「達成済みなのに停滞」と誤検知する種
 配信を止める/戻すのも同じ経路——`tools/request_ota.py cancel <device_id>`、
 または`request`を別バージョンで打ち直す。
 
-**watchdogによる停滞検知は作らない。** Namazuはこれを「証明書検証失敗の
-ような問題が起きても、デバイスは黙ってバックオフ・リトライを繰り返すだけ
-になる」ことへの保険として追加したが、Electabuzzはwatchdog Lambda自体が
-まだ無い(フェーズ9)1台構成で、`tools/request_ota.py list`で手元から照会し、
-必要ならシリアルログを直接見る運用を前提にしている。停滞検知が欲しく
-なったら、それはwatchdog Lambda自体の話としてまとめて作る。
+**watchdogによる停滞検知は`lambda/common/ota_watch.py`にある**（2026-08-16、
+Namazuの同名モジュールをほぼ無改造で移植。→ [log/2026-08-16-watchdog-implementation.md](log/2026-08-16-watchdog-implementation.md)）。
+Namazuと同じく「証明書検証失敗のような問題が起きても、デバイスは黙って
+バックオフ・リトライを繰り返すだけになる」ことへの保険。原因までは分からない
+ので、詳細確認には引き続き`tools/request_ota.py list`での照会やシリアルログの
+直接確認が要る。
 
 ### テレメトリ: ビルド版数・空きヒープ・稼働時間も同じ便乗で送る
 
@@ -248,8 +248,8 @@ Namazuが実機で踏んだ「バックオフ無しだとloop周期ごとに取�
   TLS検証で「正規のCloudFrontから来た完全なデータ」であることは担保できる。
   `.sha256`は`publish_ota.sh`が生成し運用者が手元で目視確認する用途に留めた
   (Namazuと同じ割り切り)。
-- **停滞検知(watchdog)は無い。** 3章参照。1台構成でシリアルログを直接見る
-  運用が前提。watchdog Lambda着手時に必要なら合わせて検討する。
-- **再起動検知(`boot_epoch_us`の逆算)は無い。** uptimeヘッダは送信・ログ
-  出力までで、そこからの「再起動があったかどうか」の判定ロジックは
-  未実装(→ [open-questions.md](open-questions.md))。
+- **停滞検知(watchdog)は`lambda/common/ota_watch.py`にある**(2026-08-16、→ 3章)。
+- **再起動検知(`boot_epoch_us`の逆算)も`lambda/common/reboot_watch.py`にある**
+  (2026-08-16)。uptimeヘッダからの逆算・生存台帳への記録・watchdogによる
+  変化検知通知まで実装済み(→ [log/2026-08-16-watchdog-implementation.md](log/2026-08-16-watchdog-implementation.md))。
+  `X-Elbz-Reset-Reason`相当のヘッダはfirmware側が未対応のまま。

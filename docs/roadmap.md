@@ -106,7 +106,12 @@
    (S3 + CloudFront、カスタムドメイン無し)。**瞬時周波数**と**`timebase_source`等の
    品質**を表示する。**時刻偏差・欠測区間・rollup層はまだ**——detect/rollupが無いので
    イベント一覧・デバイス一覧タブも無い(→ [log/2026-08-07-dashboard-v1.md](log/2026-08-07-dashboard-v1.md))
-9. **detect + 通知**、**バッテリー給電と停電時の挙動**
+9. ~~**watchdog(欠測・データ遅延・AC入力断・再起動・OTA停滞の通知)**~~
+   **完了(2026-08-16)** — Namazuの`lambda/watchdog/`を踏襲し、Electabuzz固有の
+   AC入力断(`kGfrqFlagPowerFail`)・再起動検知を追加した(→
+   [log/2026-08-16-watchdog-implementation.md](log/2026-08-16-watchdog-implementation.md))。
+   **detect(周波数逸脱・RoCoF・電圧異常の確定判定)と、バッテリー給電・停電時の挙動は
+   まだ**
 
 > フェーズ4(切り出し)はハードウェアを必要としないので、**部品の到着を待つ間に
 > 進めておける。** そして切り出しが v1.0.0 として固まっていないと、

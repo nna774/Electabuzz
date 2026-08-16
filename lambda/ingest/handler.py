@@ -37,6 +37,18 @@ Lambda Function URL (payload v2.0) 前提。Namazu の
 保存する(ダッシュボードの`/devices`表示・OTA達成判定に使う)。heap/uptimeは
 台帳スキーマに含めておらずCloudWatchログに出すだけ（運用者がOTAロールアウトを
 見守る時の可観測性)。
+
+## watchdog向けの状態記録（→ docs/cloud.md「watchdog」、いずれも主経路ではない）
+
+- **AC入力断**: バッチの`flags`(offset 52)の`power_fail`ビットを生存台帳へ
+  そのまま反映する(`lambda/common/power_fail_watch.py`)。状態遷移の判定・通知は
+  watchdogが定期起動で行う
+- **再起動検知**: `X-Elbz-Uptime-Us`から`boot_epoch_us = batch_start_us - uptime_us`
+  を逆算し、ドリフト許容(±2分)を超えてズレていたら生存台帳へ書く
+  (`lambda/common/reboot_watch.py`)。watchdogが前回値との差分で通知する
+- **mute解除**: バッチを受信するたび`watchdog_muted`を無条件で解除する
+  (`lambda/common/watchdog_mute.py`)。試験機や退役機を`tools/mute_device.py`で
+  muteしても、実際に送信が来た瞬間に監視が復帰する
 """
 
 from __future__ import annotations
@@ -49,6 +61,8 @@ import time
 import boto3
 
 from batch_uplink import auth, devices
+
+from common import power_fail_watch, reboot_watch, watchdog_mute
 
 import ota_target
 import s3keys
@@ -130,6 +144,10 @@ def _handle_batch(raw: bytes, auth_device: str, headers: dict):
 
     fw_version = headers.get("x-elbz-fw-version", "")
     _record_liveness(b.header.device_id, b.header.batch_start_us, key, fw_version)
+    _record_power_fail(b.header.device_id, b.header.flags)
+    _record_reboot(b.header.device_id, b.header.batch_start_us,
+                   headers.get("x-elbz-uptime-us", ""))
+    _clear_mute(b.header.device_id)
     extra_headers = _ota_response_headers(b.header.device_id)
     return _resp(200, f"stored {key}", extra_headers)
 
@@ -162,6 +180,53 @@ def _record_liveness(device_id: int, batch_start_us: int, key: str, fw_version: 
                              fw_version=fw_version)
     except Exception as e:  # noqa: BLE001
         print(f"devices.record_batch failed: {e!r}")
+
+
+def _record_power_fail(device_id: int, flags: int) -> None:
+    """AC入力断(`kGfrqFlagPowerFail`)フラグを生存台帳へ反映する。**主経路ではない。**
+
+    watchdogが定期起動で状態遷移を評価するので、ここでは最新値をそのまま書くだけ
+    （→ lambda/common/power_fail_watch.py）。テーブル未設定なら黙って何もしない。
+    """
+    if not os.environ.get("NAMZ_DEVICES_TABLE"):
+        return
+    try:
+        power_fail_watch.record(device_id, bool(flags & wire_gridfreq.BatchFlag.POWER_FAIL))
+    except Exception as e:  # noqa: BLE001
+        print(f"power_fail_watch.record failed: {e!r}")
+
+
+def _record_reboot(device_id: int, batch_start_us: int, uptime_raw: str) -> None:
+    """稼働時間ヘッダから起動時刻を逆算し、再起動を検知したら生存台帳へ反映する。
+
+    **主経路ではない。** ドリフト許容(±2分)を超えてズレた時だけ再起動とみなす
+    （`reboot_watch.should_update_boot_epoch`）。テーブル未設定・ヘッダ無しなら
+    何もしない。
+    """
+    if not os.environ.get("NAMZ_DEVICES_TABLE") or not uptime_raw:
+        return
+    try:
+        boot_epoch_us = batch_start_us - int(uptime_raw)
+        item = devices.get_device(device_id)
+        prev = item.get("boot_epoch_us") if item else None
+        if reboot_watch.should_update_boot_epoch(prev, boot_epoch_us):
+            reboot_watch.record_boot_epoch(device_id, boot_epoch_us)
+    except Exception as e:  # noqa: BLE001
+        print(f"reboot_watch.record_boot_epoch failed: {e!r}")
+
+
+def _clear_mute(device_id: int) -> None:
+    """バッチ受信のたびwatchdogのmuteを解除する。**主経路ではない。**
+
+    mute中でなければ何もしない（`watchdog_mute.clear_mute`のUpdateExpressionは
+    対象属性が無くても失敗しない）。テーブル未設定なら何もしない。
+    """
+    if not os.environ.get("NAMZ_DEVICES_TABLE"):
+        return
+    try:
+        watchdog_mute.clear_mute(device_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"watchdog_mute.clear_mute failed: {e!r}")
 
 
 def _ota_response_headers(device_id: int) -> dict:
