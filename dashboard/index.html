@@ -60,9 +60,9 @@
     <div id="status" class="muted status-line"></div>
     <canvas id="freq-canvas"></canvas>
     <p class="muted">縦軸: 系統周波数[Hz]。灰色の破線は公称値(50/60Hz)。データが途切れている区間は
-      線をつながない（実機のPPSロックとクラウドへの`PPS_NTP`品質データの着弾はどちらも
-      確認済み。残るのは長時間soakでロックが安定し続けるかの確認のみ。時刻偏差の絶対値の
-      表示機能自体はまだ実装していない）。
+      線をつながない（フェーズ2はPPSロック・クラウドへの`PPS_NTP`品質データ着弾・
+      27時間超soakでの安定性まで確認済みでクローズ済み。時刻偏差の絶対値の表示機能
+      自体はまだ実装していない）。
       起動直後〜NTP規正(約10分)までは
       <span style="color:var(--nominal)">点線(未規正・生の値)</span>で描き、規正が済むと
       <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
