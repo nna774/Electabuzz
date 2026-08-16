@@ -378,11 +378,9 @@ function redrawVrmsChart() {
   drawVrmsChart(document.getElementById('vrms-canvas'), lastSeries, showWall);
   document.getElementById('vrms-caption').innerHTML = showWall
     ? '縦軸: 壁側電圧の概算値[V](<code>v_rms_mv</code>×巻数比10.08倍。巻数比は暫定値・未確定なので' +
-      '参考程度に留めること)。線が途切れている区間は<code>v_rms_mv</code>未対応のファーム時代の' +
-      'レコード(常に0)であることを示す。'
+      '参考程度に留めること)。'
     : '縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。' +
-      '上のチェックボックスで壁側電圧(概算)表示に切り替えられる。線が途切れている区間は' +
-      '<code>v_rms_mv</code>未対応のファーム時代のレコード(常に0)であることを示す。';
+      '上のチェックボックスで壁側電圧(概算)表示に切り替えられる。';
 }
 
 async function refresh() {
