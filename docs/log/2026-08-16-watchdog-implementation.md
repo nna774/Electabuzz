@@ -107,9 +107,32 @@ SlackユーザーIDはterraform変数`slack_mention`の既定値として、Nama
 - `terraform validate`: 緑(`terraform init -backend=false`でprovider解決のみ)
 - `terraform fmt`: 適用済み
 
+## apply・実クラウド確認(同日中に追記)
+
+ユーザーから明示の許可を得て`terraform apply`を実行した。`terraform plan`は
+**4 add(watchdog Lambda・EventBridgeルール/ターゲット・permission)/2 change
+(ingest/apiが`common/`同梱により再デプロイ、破壊的変更なし)/0 destroy**で、
+そのまま`apply complete`。
+
+実クラウドで実際に動くかを、通常運転中の実機を止めずに確認する方法として
+watchdog Lambdaを手動invokeした:
+
+```
+$ aws lambda invoke --function-name electabuzz-watchdog out.json
+{"ok": true, "actions": [{"device_id": 1, "action": "baseline"}]}
+```
+
+エラーなく完走し、実機device 1の生存台帳(`electabuzz-devices`)を実際に読んで
+評価した。返ってきたアクションは`baseline`——**再起動検知の初回観測**を正しく
+検知し、`boot_epoch_notified_us`だけ記録してSlack通知はしない、という設計通りの
+黙りかたをした(想定外の`offline`/`power_fail`等は出ていない=実機は正常稼働中)。
+DynamoDBを直接読み、`power_fail=false`・`boot_epoch_us`と`boot_epoch_notified_us`が
+一致していることも確認した——ingest側の状態記録とwatchdog側の読み取りが
+両方とも実データで機能している。
+
 ## まだやっていないこと
 
-- **`terraform apply`はまだ実行していない**(費用が生じる操作なので明示の許可が要る)
-- **実機での動作確認はまだ**——AC入力線を実際に抜く・デバイスを止める等で
-  Slack通知が実際に飛ぶかどうかは、applyしてからでないと見られない
+- **異常系の実機確認はまだ**——AC入力線を実際に抜く・デバイスを止める等で
+  「欠測」「AC入力断」「再起動」の通知が実際にSlackへ飛ぶかどうかは未確認。
+  通常運転中の実機を意図的に止める操作なので、ユーザーの判断で任意のタイミングに行う
 - `reset_reason`ヘッダの追加(firmware側の変更が要るため、今回のスコープ外)
