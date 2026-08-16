@@ -137,6 +137,39 @@ NOMINAL区間かつ補正係数が求まっているレコードには
 補正値を出さない」形で守る。レスポンスには各点の`timebase_source`(文字列配列)
 も追加し、ダッシュボードが区間ごとに線種を変えられるようにしてある。
 
+### TE絶対値表示のアンカー(2026-08-17設計・未実装)
+
+**v1は`timebase_source=PPS`限定。** NOMINAL/NTP区間はTEを描かない
+(NTPロックでの帯付き表示は`docs/open-questions.md`へ送った——実運用では
+PPSロック(30秒)がNTPロック(600秒)より先に来ることが多く、NTP限定の状態が
+長く続かない見込みが高いため)。
+
+TEは積分量なので、`freq_hz`のような「隣接点との差分」では出せず、**アンカー
+(`t0_us`, `cycles0`)からの累積**が要る(→ [storage.md](storage.md)「セッションの
+扱い」)。アンカーは「PPSロック中かつ直前にdiscontinuity/power_fail無し」の
+連続区間ごとに作り直すので、1セッション内で複数行になりうる。
+
+新規テーブル`${local.name}-te-anchors`は、並行してマージされていた`detect`
+(下記)の`electabuzz-events`と同じ形にする——**hash_keyのみ(`anchor_id`, S)、
+`PAY_PER_REQUEST`、実機1台前提で`scan`+Pythonの絞り込みで足りる**という
+判断も揃える。`anchor_id`は`event_id`と同じ発想の決定的な文字列
+(`f"{device_id:04d}-{session_id}-{t0_us}"`)。属性は`device_id`/`session_id`/
+`t0_us`/`cycles0_q16`/`run_open`(BOOL)/`tb_residual_ns`。
+
+- **書き込み(ingest)**: バッチに`discontinuity`/`power_fail`が立っていたら、
+  該当device×sessionで`run_open=true`の行を`scan`で探し、あれば`run_open=false`
+  に更新するだけ(新規行は作らない)。PPS規正済みかつsuspectでないバッチは、
+  開いている行が無いときだけ新規行を追加(`t0`=バッチ最初のレコード、
+  `cycles0`=そのcycles)。開いている行があれば何もしない
+- **読み込み(api)**: `_series_payload()`が扱うセッションごとに、device×session
+  で`scan`してアンカー行をまとめて取得・`t0_us`昇順に並べ、既存の時刻順1パス
+  走査(`prev_session`/`prev_t`/`prev_cycles`を追跡するループ)に「今どの
+  アンカーを使うべきか」を進めるポインタを1本足してマージする。バッチ単位で
+  DynamoDBへ都度問い合わせない
+
+詳しい経緯・検討過程は
+[log/2026-08-17-te-absolute-display-design.md](log/2026-08-17-te-absolute-display-design.md)。
+
 ## watchdog
 
 **実装済み: `lambda/watchdog/handler.py`**（テストは `lambda/tests/test_watchdog.py` 他）。

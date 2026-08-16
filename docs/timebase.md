@@ -215,6 +215,15 @@ SNTP クライアント）。**回帰は Arduino に依存しない**ので `tes
 
 **グラフの上で帯が縮む瞬間が、GNSS を繋いだ日になる。それが一番正直な見せ方だ。**
 
+> **v1実装では`NTP`行(帯付き表示)は実装しない。** ロック条件を比較すると
+> `NtpTimebase::kMinSpanSeconds`=600秒に対し`PpsTimebase::kMinSpanSeconds`=30秒
+> (`firmware/lib/Timebase/src/*.h`)で、GNSS fix自体も段階1の実測(→ [gnss.md](gnss.md))
+> で安定していることから、実運用ではPPSロックの方がNTPロックより先に来ることの方が
+> 多い。NTP限定の状態が長く続かない見込みが高く、帯表示の実装コストに見合わないと
+> 判断し、v1は`PPS`行のみ実装する。`NTP`行は必要になったら
+> [open-questions.md](open-questions.md)から拾う
+> (→ [log/2026-08-17-te-absolute-display-design.md](log/2026-08-17-te-absolute-display-design.md))。
+
 ### NOMINAL区間(起動直後〜NTPロックまで)の扱い (2026-08-08決定)
 
 `env:record`は**NTPロックも待たない**。起動直後から公称`fs`でGoertzelを動かし、
