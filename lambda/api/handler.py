@@ -15,6 +15,10 @@ Lambda Function URL (payload v2.0)。Namazu の
 tb_residual_ns）を載せる。これがダッシュボードの「今の状態」表示の主で、
 `/devices`は「そのデータがどのビルド・いつ届いたものか」を補う
 （`t_us`の鮮度と`last_ingest_at_us`は独立——前者は測定時刻、後者は受信壁時計）。
+
+`te_seconds`（系統時刻偏差の絶対値[秒]、`t_us`と並行な配列）は`timebase_source`が
+PPS/PPS_NTPの区間だけ値を持つ。アンカー(`common/te_anchors.py`、→ docs/cloud.md)
+からの累積値で、アンカーが作り直された区間の境界ではNoneを挟んで線をつながない。
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from batch_uplink import devices
 
 import store_gridfreq
 import wire_gridfreq
-from common import grid_events
+from common import grid_events, te_anchors
 
 _S3 = None
 
@@ -179,6 +183,20 @@ def _session_fs_corrections(batches: list[wire_gridfreq.Batch]) -> dict[int, flo
     return corrections
 
 
+def _load_te_anchors(batches: list[wire_gridfreq.Batch]) -> dict[tuple[int, int], list[dict]]:
+    """バッチが跨るdevice×sessionぶん、TEアンカーをまとめて取得する。
+
+    テーブル未設定なら空(=TEは常にNone、既存デバイス・環境の挙動を変えない)。
+    バッチ単位ではなくdevice×session単位でまとめて取ることで、DynamoDBへの
+    往復を最小限にする——30分の窓に断線が複数回あれば、そのぶんアンカーが
+    複数行返ってくることを前提にしている(→ docs/log/2026-08-17-te-absolute-display-design.md)。
+    """
+    if not os.environ.get("ELBZ_TE_ANCHORS_TABLE"):
+        return {}
+    needed = {(b.header.device_id, b.header.session_id) for b in batches}
+    return {key: te_anchors.anchors_for_session(*key) for key in needed}
+
+
 def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: int) -> dict:
     t_us: list[int] = []
     freq_hz: list[float | None] = []
@@ -186,9 +204,15 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
     timebase_source: list[str] = []
     v_rms_mv: list[int] = []
     continuous: list[bool] = []
+    te_seconds: list[float | None] = []
     latest = None
 
     session_corrections = _session_fs_corrections(batches)
+    te_anchor_map = _load_te_anchors(batches)
+    # device×sessionごとに「今どのアンカー行を使うべきか」を指すポインタ。
+    # バッチは時刻順に処理される前提(既存のprev_t追跡と同じ前提)なので、
+    # 一度進めたら戻さない一方向の走査で足りる。
+    te_anchor_ptr: dict[tuple[int, int], int] = {}
 
     # 隣接レコード間で周波数(=cyclesの差分/経過時間)を計算するための「直前の点」。
     # session_id が変わる(再起動)・間隔が想定(record_rate_mhz)から大きく外れる・
@@ -218,6 +242,15 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
         is_nominal_source = h.timebase_source == wire_gridfreq.TimebaseSource.NOMINAL
         correction = session_corrections.get(h.session_id)
 
+        # TE(絶対値)は積分量なのでfreq_hzのような隣接差分では出せず、アンカー
+        # (te_anchors.py、→ docs/cloud.md)からの累積が要る。discontinuityに加えて
+        # power_failも見る——AC入力断はGoertzelのresetWindow()を呼ばないので
+        # discontinuityビットだけでは検出できない、cyclesが断線を跨いで積算され
+        # 続ける事故を防ぐため(→ docs/log/2026-08-17-te-absolute-display-design.md)。
+        te_suspect = suspect or bool(h.batch_flags & wire_gridfreq.BatchFlag.POWER_FAIL)
+        te_key = (h.device_id, h.session_id)
+        te_anchor_list = te_anchor_map.get(te_key, [])
+
         for t, r in zip(b.timestamps_us(), b.records):
             in_range = start_us <= t <= end_us
             f = None
@@ -246,6 +279,21 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                               and prev_session_any == h.session_id
                               and (t - prev_t_any) / 1e6 <= 2.0 * nominal_dt)
 
+            # このdevice×sessionで、時刻tの時点で有効なアンカー(t0_usがt以下で
+            # 最大のもの)を指すまでポインタを進める。アンカーはt0_us昇順なので
+            # 一方向に進めるだけで足りる(戻さない)。
+            ptr = te_anchor_ptr.get(te_key, 0)
+            while ptr + 1 < len(te_anchor_list) and te_anchor_list[ptr + 1]["t0_us"] <= t:
+                ptr += 1
+            te_anchor_ptr[te_key] = ptr
+            current_anchor = (te_anchor_list[ptr] if te_anchor_list
+                               and te_anchor_list[ptr]["t0_us"] <= t else None)
+
+            te = None
+            if not te_suspect and current_anchor is not None and h.is_pps_disciplined:
+                te = ((r.cycles - current_anchor["cycles0"]) / h.f_nominal_hz
+                      - (t - current_anchor["t0_us"]) / 1e6)
+
             if in_range:
                 t_us.append(t)
                 freq_hz.append(round(f, 6) if f is not None else None)
@@ -255,6 +303,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                 # 差分計算に依存しない。suspect/discontinuityで抑制する理由が無い。
                 v_rms_mv.append(r.v_rms_mv)
                 continuous.append(is_continuous)
+                te_seconds.append(round(te, 6) if te is not None else None)
                 latest = {
                     "t_us": t,
                     "freq_hz": round(f, 6) if f is not None else None,
@@ -268,6 +317,7 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
                     "session_id": h.session_id,
                     "device_id": h.device_id,
                     "v_rms_mv": r.v_rms_mv,
+                    "te_seconds": round(te, 6) if te is not None else None,
                 }
 
             if not suspect:
@@ -280,5 +330,5 @@ def _series_payload(batches: list[wire_gridfreq.Batch], start_us: int, end_us: i
         "start_us": start_us, "end_us": end_us, "n": len(t_us),
         "t_us": t_us, "freq_hz": freq_hz, "freq_hz_corrected": freq_hz_corrected,
         "timebase_source": timebase_source, "v_rms_mv": v_rms_mv,
-        "continuous": continuous, "latest": latest,
+        "continuous": continuous, "te_seconds": te_seconds, "latest": latest,
     }

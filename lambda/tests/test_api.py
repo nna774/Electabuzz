@@ -269,6 +269,104 @@ def test_nominal_gets_corrected_once_session_locks(h):
     assert body["freq_hz"][4] == pytest.approx(50.0)
 
 
+# --- TE(絶対値)。→ docs/cloud.md「TE絶対値表示のアンカー」 ------------------
+# source=2はPPS、3はPPS_NTP(→ wire_gridfreq.TimebaseSource)。te_anchors.py自体は
+# DynamoDBに触るのでテストしない(→ test_te_anchors.py)。ここではh.te_anchorsの
+# anchors_for_sessionだけ差し替えて、_series_payloadのマージ計算を検証する。
+
+def test_te_seconds_none_without_table(h):
+    """ELBZ_TE_ANCHORS_TABLE未設定なら、PPSソースでもte_secondsは常にNone。"""
+    recs = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert all(v is None for v in body["te_seconds"])
+
+
+def test_te_seconds_zero_at_anchor_when_on_frequency(h, monkeypatch):
+    """公称ちょうどのままなら、アンカーからの経過に関わらずTEは常に0。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    monkeypatch.setattr(h.te_anchors, "anchors_for_session",
+                        lambda device_id, session_id: [{"t0_us": BASE_US, "cycles0": 0.0}])
+    recs = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert body["te_seconds"] == [pytest.approx(0.0)] * 3
+    assert body["latest"]["te_seconds"] == pytest.approx(0.0)
+
+
+def test_te_seconds_grows_when_frequency_above_nominal(h, monkeypatch):
+    """公称+10mHzを保つと、アンカーからの経過時間に比例してTEが伸びる。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    monkeypatch.setattr(h.te_anchors, "anchors_for_session",
+                        lambda device_id, session_id: [{"t0_us": BASE_US, "cycles0": 0.0}])
+    recs = [(cycles(50.01, i), 0, 0) for i in range(4)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 10_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    expected = [i * (50.01 / 50.0 - 1.0) for i in range(4)]
+    for got, exp in zip(body["te_seconds"], expected):
+        assert got == pytest.approx(exp, abs=1e-6)
+
+
+def test_te_seconds_none_for_ntp_only_source(h, monkeypatch):
+    """v1はPPS限定(→ docs/timebase.md)。アンカーがあってもNTP単独では出さない。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    monkeypatch.setattr(h.te_anchors, "anchors_for_session",
+                        lambda device_id, session_id: [{"t0_us": BASE_US, "cycles0": 0.0}])
+    recs = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=1)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert all(v is None for v in body["te_seconds"])
+
+
+def test_te_seconds_suppressed_by_power_fail_flag(h, monkeypatch):
+    """discontinuityと同様、power_fail区間もTEを出さない(→ ingest側のrun close)。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    monkeypatch.setattr(h.te_anchors, "anchors_for_session",
+                        lambda device_id, session_id: [{"t0_us": BASE_US, "cycles0": 0.0}])
+    recs = [(cycles(50.0, i), 0, 0) for i in range(3)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=2,
+         flags=1 << 3)  # GfrqFlagPowerFail
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 5_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    assert all(v is None for v in body["te_seconds"])
+
+
+def test_te_seconds_uses_latest_anchor_at_or_before_time(h, monkeypatch):
+    """断線を挟んで2本のアンカーがある想定。各時刻はそれ以前で最新のアンカーを使う。"""
+    monkeypatch.setenv("ELBZ_TE_ANCHORS_TABLE", "electabuzz-te-anchors")
+    second_t0 = BASE_US + 5_000_000
+    monkeypatch.setattr(h.te_anchors, "anchors_for_session",
+                        lambda device_id, session_id: [
+                            {"t0_us": BASE_US, "cycles0": 0.0},
+                            {"t0_us": second_t0, "cycles0": 250.0},  # 5秒後、公称どおり進んだ想定
+                        ])
+    recs = [(cycles(50.0, i), 0, 0) for i in range(8)]
+    seed(h, device_id=1, batch_start_us=BASE_US, session_id=1, records=recs, source=2)
+
+    resp = h.handler(make_event("/recent", {"minutes": "1", "start": str(BASE_US + 10_000_000)}), None)
+    import json
+    body = json.loads(resp["body"])
+    # 2本目のアンカー以降(t_us[5]=second_t0以降)は、そちらを基準に0付近になる。
+    assert body["te_seconds"][5] == pytest.approx(0.0, abs=1e-6)
+    assert body["te_seconds"][7] == pytest.approx(0.0, abs=1e-6)
+    # 1本目のアンカーの範囲(t < second_t0)は引き続き最初のアンカー基準。
+    assert body["te_seconds"][2] == pytest.approx(0.0, abs=1e-6)
+
+
 def test_minutes_is_clamped(h):
     # 巨大値・負値・非数値のいずれも [0.1, 30] にクランプされ、例外にならない。
     for raw in ("99999", "-5", "not-a-number"):
