@@ -19,6 +19,17 @@ async function apiGet(path) {
 const SOURCE_LABEL = { NOMINAL: '未規正', NTP: 'NTP', PPS: 'PPS', PPS_NTP: 'PPS+NTP' };
 const SOURCE_CLASS = { NOMINAL: 'badge-nominal', NTP: 'badge-ntp', PPS: 'badge-pps', PPS_NTP: 'badge-pps' };
 
+// detectが確定したイベントの種類ラベル・ピーク値の単位(→ lambda/detect/handler.py
+// のEVENT_TITLES/PEAK_LABELSと対応、同じ単位で表示を揃える)。
+const EVENT_TYPE_LABEL = { freq_deviation: '周波数逸脱', rocof: 'RoCoF(急変)', voltage_anomaly: '電圧異常' };
+
+function formatPeakValue(eventType, peak) {
+  if (eventType === 'freq_deviation') return (peak * 1000).toFixed(1) + ' mHz';
+  if (eventType === 'rocof') return (peak * 1000).toFixed(1) + ' mHz/s';
+  if (eventType === 'voltage_anomaly') return (peak * 100).toFixed(1) + ' %';
+  return String(peak);
+}
+
 // トランス巻数比の暫定値(2026-08-15実測、複数回で確認中。→ docs/hardware.md
 // 「v_rms_mvの基準点とトランス巻数比」節)。品質テーブルの「壁側電圧(概算)」行は
 // 常時表示するが、「暫定・未校正」の注記を添えて精度への過信を防ぐ
@@ -34,6 +45,12 @@ function themeColor(varName) {
 // 表示範囲は最大30分(→#minutes)なので日付をまたぐ表示は不要。
 function formatClock(t_us) {
   return new Date(t_us / 1000).toLocaleTimeString('ja-JP', { hour12: false });
+}
+
+// t_usを日付+時刻で表示する。イベントは表示範囲(#minutes)と独立に何日も前の
+// ものが残りうるので、formatClockと違い日付を省略できない。
+function formatDateTime(t_us) {
+  return new Date(t_us / 1000).toLocaleString('ja-JP', { hour12: false });
 }
 
 // --- Canvas 描画。外部ライブラリなし(vanilla Canvas 2D) ---
@@ -330,6 +347,23 @@ function renderStatus(series, device) {
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
 }
 
+// detectが確定したイベント(→ lambda/detect/handler.py)の一覧。取得元は/events
+// (直近limit件、last_us降順)。イベントは表示範囲(#minutes)と無関係に独立して
+// 取得・表示する——グラフの表示範囲を絞っても直近の逸脱を見失わないようにする。
+function renderEvents(events) {
+  const tbody = document.querySelector('#events-table tbody');
+  if (!events || events.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted">直近のイベントはありません</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.map((e) => {
+    const label = EVENT_TYPE_LABEL[e.event_type] || e.event_type;
+    const durationS = Math.max(0, Math.round((e.last_us - e.onset_us) / 1e6));
+    return `<tr><td>${formatDateTime(e.onset_us)}</td><td>${label}</td>` +
+      `<td>${formatPeakValue(e.event_type, e.peak_value)}</td><td>${durationS}秒</td></tr>`;
+  }).join('');
+}
+
 // --- メインループ ---
 let refreshTimer = null;
 // 壁側電圧チェックボックスの再描画用(再フェッチせず直前の値で出し直す)。
@@ -364,6 +398,12 @@ async function refresh() {
     try {
       const d = await apiGet('/devices');
       device = (d.devices || []).find((x) => x.device_id === series.latest?.device_id) || d.devices?.[0] || null;
+    } catch (e) { /* 補助情報なので無視 */ }
+    // detectイベント(/events)も補助情報。取得失敗時は直前の表示を残す
+    // (空扱いで上書きしない——「イベント無し」と「取得できなかった」を混同しない)。
+    try {
+      const ev = await apiGet('/events?limit=20');
+      renderEvents(ev.events || []);
     } catch (e) { /* 補助情報なので無視 */ }
     lastSeries = series;
     lastDevice = device;
