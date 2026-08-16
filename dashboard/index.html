@@ -68,10 +68,6 @@
       <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
       がその区間へ遡って重なる。</p>
 
-    <canvas id="vrms-canvas"></canvas>
-    <p class="muted" id="vrms-caption">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。
-      上のチェックボックスで壁側電圧(概算)表示に切り替えられる。</p>
-
     <canvas id="te-canvas"></canvas>
     <p class="muted">縦軸: 系統時刻偏差(TE)[ms]。<strong>PPSロック区間のみ表示する</strong>
       (NOMINAL/NTP限定の区間は描かない、→ docs/timebase.md)。0msの破線は直近の
@@ -79,6 +75,10 @@
       作り直されるたびに線が途切れ、そこから0msへ仕切り直す。1本の連続した
       「本当の系統時計オフセット」ではなく、「直近のアンカー以降どれだけ動いたか」
       を示す値であることに注意。</p>
+
+    <canvas id="vrms-canvas"></canvas>
+    <p class="muted" id="vrms-caption">縦軸: トランス二次側の実効値[V](<code>v_rms_mv</code>の実測値そのもの)。
+      上のチェックボックスで壁側電圧(概算)表示に切り替えられる。</p>
 
     <table id="quality-table">
       <tbody></tbody>
