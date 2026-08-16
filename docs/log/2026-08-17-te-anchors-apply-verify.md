@@ -41,6 +41,18 @@ PPSロックしていることと整合する。ingest側の`open_run_if_needed`
 「既に開いているrunがあれば何もしない」を正しく守っている(2回目以降の
 バッチで新規行が増えていない)ことも、この1件だけしか無い事実から確認できる。
 
+## dashboardが更新されていなかった
+
+apply直後、ユーザーから「te-canvasが出ない」と指摘を受けた。`terraform apply`は
+Lambda/DynamoDBだけを更新し、**dashboard(`dashboard/`)はterraform管理外**
+(`CLAUDE.md`・[dashboard/README.md](../../dashboard/README.md)にも明記済み)——
+別途`aws s3 sync`+CloudFront invalidationが要るのを見落としていた。
+
+`dashboard/README.md`の手順どおり(`config.js`をコピー・**`--delete`は付けない**
+——付けると同居している`ota/`配下のOTA配信物を消す事故が過去にある)に
+`aws s3 sync`してinvalidationを発行し、`curl`で`te-canvas`・`drawTeChart`が
+実際に配信されていることを確認した。
+
 ## 次に何が可能になったか
 
 TE絶対値表示は設計・実装・apply・実クラウド確認まで完了した。断線(power_fail)
