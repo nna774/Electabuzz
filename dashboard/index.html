@@ -60,7 +60,8 @@
     <div id="status" class="muted status-line"></div>
     <canvas id="freq-canvas"></canvas>
     <p class="muted">縦軸: 系統周波数[Hz]。灰色の破線は公称値(50/60Hz)。データが途切れている区間は
-      線をつながない（PPS未着のためGNSS品質ではなくNTP品質。時刻偏差の絶対値はまだ出せない）。
+      線をつながない（実機のPPSロック自体は成功済みだが、soak確認・クラウド着弾確認がまだのため
+      現状クラウドに届くのはNTP品質のデータのみ。時刻偏差の絶対値はまだ出せない）。
       起動直後〜NTP規正(約10分)までは
       <span style="color:var(--nominal)">点線(未規正・生の値)</span>で描き、規正が済むと
       <span style="color:var(--predict)">アンバーの破線(事後補正した予測値)</span>
