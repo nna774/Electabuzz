@@ -31,3 +31,7 @@
 
 **`series/` は `raw/`（Namazu側、90日expire）と違って永久保存前提**なので、
 キャッシュが古くなって困ることは無い（→ [docs/cloud.md](../docs/cloud.md)）。
+
+この規約に沿った実例が `check_pps_soak.py`（`timebase_source`の後退・欠測ギャップ・
+予期しない再起動を期間内で機械的に検出する。`/recent` APIの`MAX_RECENT_MINUTES`
+上限を超えて数時間〜数日単位で見たいときに使う → [docs/log/2026-08-17-phase2-soak-confirmation.md](../docs/log/2026-08-17-phase2-soak-confirmation.md)）。

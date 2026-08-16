@@ -2,8 +2,9 @@
 
 商用電力の周波数と**系統時刻偏差**（グリッドの時計が標準時から何秒ずれているか）を
 常時測る装置。設置先は 50Hz 地域（東日本）。**実機1台が稼働中で、系統周波数の
-ダッシュボードも公開済み**（→ 2章）。**フェーズ2(PPS)は実配線・初回ロック成功済み**
-（2026-08-15、残差30ns/s）——soak確認とクラウド着弾確認が残っている。
+ダッシュボードも公開済み**（→ 2章）。**フェーズ2(PPS)は実配線・初回ロック・クラウド
+着弾・soak確認(27.8時間・再起動ゼロでロック率100%)まで全て完了し、クローズした**
+（2026-08-15配線・2026-08-17soak確認完了）。
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16、欠測・データ遅延・AC入力断・再起動検知・pull型OTA停滞の5項目を
 Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っている）。
@@ -29,16 +30,18 @@ Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っ�
 **[docs/progress.md](docs/progress.md) を単一の真実とする。** 手持ち部品・確定事項・
 着手可能タスクはそこにあり、**このファイルに複製しない**（二重管理は必ず食い違う）。
 
-要点だけ言うと、**フェーズ0〜1.5・3・4・5・6・8(v1)は完了し、実機1台が
+要点だけ言うと、**フェーズ0〜1.5・2・3・4・5・6・8(v1)は完了し、実機1台が
 `env:record` で稼働、ダッシュボードも実データを表示している。** GNSS受信機・
 アクティブアンテナは到着済みで、**段階1の判定(捕捉衛星数・fix安定性の実測)は
 完了・クローズした**（2026-08-15。屋外・窓ガラス貼り付け・向き検証・夜通し
 2セッションを跨いだ通算約44時間+αのログで、numSVは常に4機の判定基準を大きく
 上回り、無fixは実質1件のみ。**NEO-M8T不要、航法用受信機(NEO-M8N)で足りると
 確定** → [docs/gnss.md](docs/gnss.md)）。**フェーズ2(PPS同時サンプリング。方式A)は
-実配線・初回ロックに成功した**（2026-08-15、残差30ns/sのppb級。設計全体の成否を
-決める本丸が実測で通った → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
-残るのはsoak確認・クラウド着弾確認・GNSS UART側のfixフラグ不具合調査。
+実配線・初回ロック・GNSS UART側のfixフラグ不具合修正・クラウドへの`PPS_NTP`品質
+データ着弾・soak確認(27.8時間・再起動ゼロでロック率100%)まで全て完了し、
+クローズした**（2026-08-15配線、2026-08-17soak確認完了。設計全体の成否を決める
+本丸が実測で通った → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)、
+[docs/log/2026-08-17-phase2-soak-confirmation.md](docs/log/2026-08-17-phase2-soak-confirmation.md)）。
 **watchdog Lambda(フェーズ9)は欠測監視部分を`apply`・実クラウド確認まで完了した**
 （2026-08-16 → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
 detect(周波数逸脱の確定判定)は引き続き未着手。
@@ -95,17 +98,21 @@ firmware/lib/Goertzel/test/run.sh          # 同上
 
 ### 着手可能なタスク
 
-**フェーズ2(PPS同時サンプリング。方式A)は実配線・初回ロックに成功した**
+**フェーズ2(PPS同時サンプリング。方式A)はクローズした。** 実配線・初回ロック成功
 （2026-08-15、残差30ns/s → [docs/log/2026-08-15-phase2-pps-first-lock.md](docs/log/2026-08-15-phase2-pps-first-lock.md)）。
 `kPpsEdgeThreshold`はプレースホルダ(100000)のままで変更不要と確認済み。
 `kGfrqFlagGnssFix`が立たない不具合(`NmeaLineReader::lineLen()`が常に0を
 返すバグ)も特定・修正済み(2026-08-15、実機で`flags=0x0003`を確認
 → [docs/log/2026-08-15-nmea-line-reader-linelen-bug.md](docs/log/2026-08-15-nmea-line-reader-linelen-bug.md))。
-**次の一手**: ①数時間〜1日のsoakでロックの安定性を確認 ②クラウド(`series/`)に
-`timebase_source=PPS`のデータが着弾することを確認。
+クラウド(`series/`)に`timebase_source=PPS_NTP`のデータが着弾することも確認済み
+（2026-08-17、`/recent`・`/devices`を実機に対して直接curlして確認
+→ [docs/log/2026-08-17-dashboard-pps-caption-fix.md](docs/log/2026-08-17-dashboard-pps-caption-fix.md)）。
+**soak確認も完了した**（2026-08-17、`series/`を直接読んで解析する`tools/check_pps_soak.py`
+を新規に書き実測——直近の再起動以降27.8時間・再起動ゼロ・ソース後退ゼロ・欠測ギャップ
+ゼロでロック率100.0% → [docs/log/2026-08-17-phase2-soak-confirmation.md](docs/log/2026-08-17-phase2-soak-confirmation.md)）。
 
-それまでの間に手を付けられるもの: 時刻偏差(TE)の絶対値表示・欠測区間の可視化
-（どちらもPPS到着後でないと本質的な値は出せないが、UIの下地は先に作れる）。
+**次の一手**: detect(フェーズ9の残り、周波数逸脱の確定判定)。あるいは時刻偏差(TE)の
+絶対値表示・欠測区間の可視化(PPSデータが安定して出ている今、着手可能)。
 **OTA(pull型)は実装・実機実クラウド確認とも完了済み**（2026-08-15、
 `v_rms_mv`配線を含む最新ビルドで配信全経路(`publish_ota.sh`→
 `request_ota.py`→DynamoDB→取得→書き込み→再起動→台帳自動解放)を実機で確認
@@ -163,6 +170,7 @@ detect・rollup 用の terraform は対応する Lambda がまだ無いので書
 | ingest の実装の契約（応答コードと置き先・CRC不一致の隔離・環境変数） / detect / rollup | [docs/cloud.md](docs/cloud.md) |
 | S3の`series/`を直接取ってきて解析するときのキャッシュ運用（`.s3cache/`必須） | [tools/README.md](tools/README.md) |
 | OTA(pull型)の設計・NVS化・トリガー(バッチ送信便乗)・テレメトリヘッダ | [docs/ota.md](docs/ota.md) |
+| S3の`series/`を直接取ってきて解析するときのキャッシュ運用（`.s3cache/`必須） | [tools/README.md](tools/README.md) |
 | 共通ライブラリの切り出し / 流用境界の実測 / タグ pin / レポジトリ配置 | [docs/batch-uplink.md](docs/batch-uplink.md) |
 | 絶対確度をどう担保するか / 先行実装との外部照合 | [docs/verification.md](docs/verification.md) |
 | フェーズの順序 | [docs/roadmap.md](docs/roadmap.md) |
