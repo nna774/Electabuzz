@@ -12,18 +12,21 @@ locals {
     for id, secret in var.device_hmac_secrets : "NAMZ_HMAC_SECRET_${id}" => secret
   }
   ingest_env = merge({
-    ELBZ_BUCKET        = local.data_bucket
-    NAMZ_HMAC_SECRET   = var.hmac_secret
-    NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
+    ELBZ_BUCKET           = local.data_bucket
+    NAMZ_HMAC_SECRET      = var.hmac_secret
+    NAMZ_DEVICES_TABLE    = aws_dynamodb_table.devices.name
+    ELBZ_TE_ANCHORS_TABLE = aws_dynamodb_table.te_anchors.name
   }, local.device_secret_env)
 
   # api は読み取り専用・認証なしなので HMAC 鍵は要らない。
   # NAMZ_DEVICES_TABLE は /devices の読み取り(devices.list_devices/get_device)に、
-  # NAMZ_EVENTS_TABLE は /events の読み取り(grid_events.recent_events)に使う。
+  # NAMZ_EVENTS_TABLE は /events の読み取り(grid_events.recent_events)に、
+  # ELBZ_TE_ANCHORS_TABLE は /recent のTE計算(te_anchors.anchors_for_session)に使う。
   api_env = {
-    ELBZ_BUCKET        = local.data_bucket
-    NAMZ_DEVICES_TABLE = aws_dynamodb_table.devices.name
-    NAMZ_EVENTS_TABLE  = aws_dynamodb_table.events.name
+    ELBZ_BUCKET           = local.data_bucket
+    NAMZ_DEVICES_TABLE    = aws_dynamodb_table.devices.name
+    NAMZ_EVENTS_TABLE     = aws_dynamodb_table.events.name
+    ELBZ_TE_ANCHORS_TABLE = aws_dynamodb_table.te_anchors.name
   }
 
   # detect は series/ を読み(境界レコードの補完取得)、events/台帳へ書く。

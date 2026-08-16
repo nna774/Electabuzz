@@ -21,6 +21,7 @@ Lambda Function URL (payload v2.0) 前提。Namazu の
 | `ELBZ_BUCKET` | ここ | 保存先バケット（必須） |
 | `NAMZ_HMAC_SECRET`, `NAMZ_HMAC_SECRET_<id>` | `batch_uplink.auth` | デバイス共有鍵 |
 | `NAMZ_DEVICES_TABLE` | `batch_uplink.devices`・`ota_target` | 生存台帳兼pull型OTA配信対象。**未設定なら台帳を書かず、OTAヘッダも返さない** |
+| `ELBZ_TE_ANCHORS_TABLE` | `common.te_anchors` | TE絶対値表示のセッションアンカー(→ docs/cloud.md)。**未設定ならアンカーを書かない** |
 
 ## pull型OTA（→ docs/ota.md）
 
@@ -62,7 +63,7 @@ import boto3
 
 from batch_uplink import auth, devices
 
-from common import power_fail_watch, reboot_watch, watchdog_mute
+from common import power_fail_watch, reboot_watch, te_anchors, watchdog_mute
 
 import ota_target
 import s3keys
@@ -147,6 +148,7 @@ def _handle_batch(raw: bytes, auth_device: str, headers: dict):
     _record_power_fail(b.header.device_id, b.header.flags)
     _record_reboot(b.header.device_id, b.header.batch_start_us,
                    headers.get("x-elbz-uptime-us", ""))
+    _record_te_anchor(b)
     _clear_mute(b.header.device_id)
     extra_headers = _ota_response_headers(b.header.device_id)
     return _resp(200, f"stored {key}", extra_headers)
@@ -213,6 +215,32 @@ def _record_reboot(device_id: int, batch_start_us: int, uptime_raw: str) -> None
             reboot_watch.record_boot_epoch(device_id, boot_epoch_us)
     except Exception as e:  # noqa: BLE001
         print(f"reboot_watch.record_boot_epoch failed: {e!r}")
+
+
+def _record_te_anchor(b: wire_gridfreq.Batch) -> None:
+    """TE絶対値表示のアンカー(→ docs/cloud.md)を更新する。**主経路ではない。**
+
+    バッチにdiscontinuity/power_failが立っていたら、開いているrunがあれば閉じる
+    (cyclesの継続性が保証されないので、このバッチを新しいアンカーの種にはしない)。
+    PPS規正済み(PPS/PPS_NTP)かつsuspectでないバッチは、開いているrunが無ければ
+    新規に開く。テーブル未設定なら何もしない。失敗してもバッチ保存は成功扱いにする
+    (他の生存台帳系記録と同じ方針)。
+    """
+    if not os.environ.get("ELBZ_TE_ANCHORS_TABLE"):
+        return
+    h = b.header
+    try:
+        suspect = bool(h.batch_flags & (wire_gridfreq.BatchFlag.DISCONTINUITY
+                                        | wire_gridfreq.BatchFlag.POWER_FAIL))
+        if suspect:
+            te_anchors.close_open_run(h.device_id, h.session_id)
+        elif h.is_pps_disciplined:
+            te_anchors.open_run_if_needed(
+                h.device_id, h.session_id,
+                t0_us=b.timestamps_us()[0], cycles0=b.records[0].cycles,
+                tb_residual_ns=h.tb_residual_ns)
+    except Exception as e:  # noqa: BLE001
+        print(f"te_anchors update failed: {e!r}")
 
 
 def _clear_mute(device_id: int) -> None:
