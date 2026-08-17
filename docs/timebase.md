@@ -224,11 +224,19 @@ SNTP クライアント）。**回帰は Arduino に依存しない**ので `tes
 > [open-questions.md](open-questions.md)から拾う
 > (→ [log/2026-08-17-te-absolute-display-design.md](log/2026-08-17-te-absolute-display-design.md))。
 
-### NOMINAL区間(起動直後〜NTPロックまで)の扱い (2026-08-08決定)
+### NOMINAL区間(起動直後〜規正ロックまで)の扱い (2026-08-08決定)
 
 `env:record`は**NTPロックも待たない**。起動直後から公称`fs`でGoertzelを動かし、
 `timebase_source=NOMINAL`と正直に申告して記録・送信する。ロックした瞬間
 (`NtpTimebase::kMinSpanSeconds`=600秒)、規正済み`fs`で推定器を作り直す。
+
+**この決定時点(2026-08-08)ではPPSがまだ配線されておらず、想定していたロック手段は
+NTPだけだった。** フェーズ2実配線後(2026-08-15〜)は`PpsTimebase::kMinSpanSeconds`=
+**30秒**の方が先に閾値へ達するため、実運用ではNOMINAL区間はNTPの約10分ではなく
+**PPSの約30秒で終わるのが通常**になっている(`timebase_source`はPPSがusableに
+なった時点で`PPS`/`PPS_NTP`へ即座に切り替わる——`main.cpp`の`hf.timebase_source`
+選択ロジックはPPS優先)。NTPの約10分は、PPS未配線・GNSS未fixなど**PPSが使えない
+場合の上限**として今も有効。
 
 理由: `fs`誤差は測定周波数の誤差にそのまま乗るので(本ドキュメント冒頭の式)、
 NOMINALタグを付けるだけでは周波数値そのものの系統誤差は救えない——TEと違い
