@@ -471,6 +471,11 @@ let refreshTimer = null;
 let lastSeries = null;
 let lastDevice = null;
 
+// detectイベントは周波数逸脱等の確定判定なので頻発しない。/recent・/devicesと同じ
+// 10秒間隔で叩く実利が無く、この間隔だけ間引く(初回は必ず取得)。
+const EVENTS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+let lastEventsFetchedAt = 0;
+
 // 電圧グラフの縦軸を「トランス二次側電圧」⇔「壁側電圧(概算)」で切り替える。
 // データ自体は再フェッチせず、直前のseriesで描き直すだけ(→#show-wall-voltage)。
 function redrawVrmsChart() {
@@ -501,10 +506,14 @@ async function refresh() {
     } catch (e) { /* 補助情報なので無視 */ }
     // detectイベント(/events)も補助情報。取得失敗時は直前の表示を残す
     // (空扱いで上書きしない——「イベント無し」と「取得できなかった」を混同しない)。
-    try {
-      const ev = await apiGet('/events?limit=20');
-      renderEvents(ev.events || []);
-    } catch (e) { /* 補助情報なので無視 */ }
+    // 頻発しないイベントなので、他の指標と違いEVENTS_REFRESH_INTERVAL_MSごとに間引く。
+    if (Date.now() - lastEventsFetchedAt >= EVENTS_REFRESH_INTERVAL_MS) {
+      try {
+        const ev = await apiGet('/events?limit=20');
+        renderEvents(ev.events || []);
+        lastEventsFetchedAt = Date.now();
+      } catch (e) { /* 補助情報なので無視(失敗時は次回の10秒後に再試行) */ }
+    }
     lastSeries = series;
     lastDevice = device;
     renderStatus(series, device);
