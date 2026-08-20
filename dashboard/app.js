@@ -41,6 +41,26 @@ function themeColor(varName) {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
 }
 
+// Date → datetime-local の value 形式（ローカル時刻 'YYYY-MM-DDTHH:MM'）。
+// Namazuのdashboard/app.jsと同じ形式(→ #start-time)。
+function localDatetimeValue(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// 開始時刻ピッカーの現在値をepoch秒で返す。未指定ならnull(=ライブ)。
+function startSec() {
+  const v = document.getElementById('start-time').value;
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+}
+
+// epoch秒 → ピッカーへ反映(ハッシュ復元用)。
+function setStartSec(sec) {
+  document.getElementById('start-time').value = sec ? localDatetimeValue(new Date(sec * 1000)) : '';
+}
+
 // t_us(unixマイクロ秒)をブラウザのローカル時刻でHH:MM:SS表示する。
 // 表示範囲は最大30分(→#minutes)なので日付をまたぐ表示は不要。
 function formatClock(t_us) {
@@ -389,20 +409,28 @@ function drawTeChart(cv, series) {
 // deviceは生存台帳(/devices、→ docs/ota.md)の該当デバイス分。取得失敗時や
 // まだ生存台帳を立てていない環境ではnull——その場合はビルド版数等の行を
 // 省くだけで、/recentが主で描くグラフ・時間基準品質の表示は妨げない。
-function renderStatus(series, device) {
+function renderStatus(series, device, fixedSec) {
   const el = document.getElementById('status');
   const latest = series.latest;
   if (!latest) {
     el.innerHTML = '<span class="status-ng">データなし</span>';
     return;
   }
-  const ageS = (Date.now() * 1000 - latest.t_us) / 1e6;
-  const staleClass = ageS > 60 ? 'status-ng' : 'status-ok';
+  // #start-timeで過去の固定窓を見ている時は「最終受信N秒前」が実際の受信鮮度と
+  // 無関係な大きな値になり紛らわしいので、指定時刻をそのまま示す(→Namazuのrefresh
+  // Liveと同じ判断)。
+  const leading = fixedSec
+    ? `<span class="muted">指定時刻表示: ${new Date(fixedSec * 1000).toLocaleString('ja-JP')} から</span>`
+    : (() => {
+        const ageS = (Date.now() * 1000 - latest.t_us) / 1e6;
+        const staleClass = ageS > 60 ? 'status-ng' : 'status-ok';
+        return `<span class="${staleClass}">最終受信 ${ageS.toFixed(0)}秒前</span>`;
+      })();
   const devMhz = latest.freq_hz == null ? null : Math.round((latest.freq_hz - latest.f_nominal_hz) * 1000);
   const srcClass = SOURCE_CLASS[latest.timebase_source] || 'badge-nominal';
   const srcLabel = SOURCE_LABEL[latest.timebase_source] || latest.timebase_source;
   el.innerHTML =
-    `<span class="${staleClass}">最終受信 ${ageS.toFixed(0)}秒前</span> ・ ` +
+    `${leading} ・ ` +
     (latest.freq_hz == null ? '周波数: 不連続区間' : `${latest.freq_hz.toFixed(3)}Hz (${devMhz >= 0 ? '+' : ''}${devMhz}mHz)`) +
     ` ・ <span class="badge ${srcClass}">${srcLabel}</span>` +
     (latest.is_disciplined ? '' : ' <span class="muted">(絶対時刻は未規正)</span>');
@@ -448,19 +476,38 @@ function renderStatus(series, device) {
     rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
 }
 
+// イベント一覧の行クリックで、そのイベントが収まる表示範囲(#minutes)・開始時刻
+// (#start-time)を計算する。#minutesはプリセット(1/5/15/30分)しか選べないので、
+// 継続時間+前後の余白が収まる最小のプリセットに丸める(MAX_RECENT_MINUTES=30が
+// api/handler.pyの上限なので、それ以上長いイベントは30分に収めて見える範囲だけ表示)。
+const EVENT_VIEW_MINUTES = [1, 5, 15, 30];
+
+function eventViewWindow(e) {
+  const durationS = Math.max(1, (e.last_us - e.onset_us) / 1e6);
+  const paddingS = Math.max(30, durationS * 0.5);  // 前後に経過を追える余白を持たせる
+  const neededMinutes = (durationS + paddingS * 2) / 60;
+  const minutes = EVENT_VIEW_MINUTES.find((m) => m >= neededMinutes) || EVENT_VIEW_MINUTES[EVENT_VIEW_MINUTES.length - 1];
+  const startSecVal = Math.ceil(e.last_us / 1e6 + paddingS);
+  return { minutes, startSecVal };
+}
+
 // detectが確定したイベント(→ lambda/detect/handler.py)の一覧。取得元は/events
 // (直近limit件、last_us降順)。イベントは表示範囲(#minutes)と無関係に独立して
 // 取得・表示する——グラフの表示範囲を絞っても直近の逸脱を見失わないようにする。
+let lastEvents = [];
+
 function renderEvents(events) {
+  lastEvents = events || [];
   const tbody = document.querySelector('#events-table tbody');
   if (!events || events.length === 0) {
     tbody.innerHTML = '<tr><td colspan="4" class="muted">直近のイベントはありません</td></tr>';
     return;
   }
-  tbody.innerHTML = events.map((e) => {
+  tbody.innerHTML = events.map((e, i) => {
     const label = EVENT_TYPE_LABEL[e.event_type] || e.event_type;
     const durationS = Math.max(0, Math.round((e.last_us - e.onset_us) / 1e6));
-    return `<tr><td>${formatDateTime(e.onset_us)}</td><td>${label}</td>` +
+    return `<tr data-idx="${i}" title="クリックでこのイベント発生時のグラフを表示">` +
+      `<td>${formatDateTime(e.onset_us)}</td><td>${label}</td>` +
       `<td>${formatPeakValue(e.event_type, e.peak_value)}</td><td>${durationS}秒</td></tr>`;
   }).join('');
 }
@@ -491,8 +538,9 @@ function redrawVrmsChart() {
 
 async function refresh() {
   const minutes = document.getElementById('minutes').value;
+  const sec = startSec();
   try {
-    const series = await apiGet(`/recent?minutes=${minutes}`);
+    const series = await apiGet(`/recent?minutes=${minutes}${sec ? `&start=${sec * 1e6}` : ''}`);
     drawFreqChart(document.getElementById('freq-canvas'), series);
     const showWall = document.getElementById('show-wall-voltage').checked;
     drawVrmsChart(document.getElementById('vrms-canvas'), series, showWall);
@@ -516,7 +564,7 @@ async function refresh() {
     }
     lastSeries = series;
     lastDevice = device;
-    renderStatus(series, device);
+    renderStatus(series, device, sec);
   } catch (e) {
     document.getElementById('status').innerHTML = `<span class="status-ng">取得失敗: ${e.message}</span>`;
   }
@@ -542,13 +590,65 @@ function initApiSettings() {
   });
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  initApiSettings();
-  document.getElementById('minutes').addEventListener('change', refresh);
-  document.getElementById('autorefresh').addEventListener('change', scheduleAutoRefresh);
-  document.getElementById('refresh-now').addEventListener('click', refresh);
-  document.getElementById('show-wall-voltage').addEventListener('change', redrawVrmsChart);
-  window.addEventListener('resize', () => refresh());
+// --- ハッシュルーティング ---
+// #live?m=<分>&auto=<0|1>&s=<epoch秒> をlocation.hashに持たせ、リロードや共有URLで
+// 表示範囲・自動更新・指定時刻(#start-time)が復元されるようにする。Namazuの
+// dashboard/app.js(liveHash/route)と同じ考え方だが、Electabuzzのダッシュボードは
+// タブ・イベント詳細・ズームを持たない単一ビューなので、そのぶんだけ縮小している。
+function liveHash() {
+  const m = document.getElementById('minutes').value;
+  const auto = document.getElementById('autorefresh').checked ? 1 : 0;
+  const sec = startSec();
+  return `live?m=${m}&auto=${auto}${sec ? `&s=${sec}` : ''}`;
+}
+
+function parseHash() {
+  const raw = location.hash.replace(/^#/, '');
+  const [path, query] = raw.split('?');
+  const params = {};
+  if (query) for (const kv of query.split('&')) { const [k, v] = kv.split('='); params[k] = v; }
+  return { path, params };
+}
+
+// ハッシュ→操作子→再取得、の順に反映する。操作子側のonchangeはハッシュを書き
+// 換えるだけにして、実際の描画はhashchange経由のここ1箇所に集約する
+// (Namazuと同じ「URLが唯一の真実」の作り)。
+function route() {
+  const { params } = parseHash();
+  if (params.m) document.getElementById('minutes').value = params.m;
+  if (params.auto !== undefined) document.getElementById('autorefresh').checked = params.auto === '1';
+  setStartSec(params.s ? parseInt(params.s, 10) : null);
   refresh();
   scheduleAutoRefresh();
+}
+
+window.addEventListener('hashchange', route);
+
+window.addEventListener('DOMContentLoaded', () => {
+  initApiSettings();
+  // 表示範囲・自動更新・開始時刻の変更はハッシュへ反映するだけ(hashchange→routeが
+  // 実際の再取得を行う。URLが唯一の真実なので、ここで直接refresh()は呼ばない)。
+  document.getElementById('minutes').addEventListener('change', () => { location.hash = liveHash(); });
+  document.getElementById('autorefresh').addEventListener('change', () => { location.hash = liveHash(); });
+  document.getElementById('start-time').addEventListener('change', () => { location.hash = liveHash(); });
+  document.getElementById('start-clear').addEventListener('click', () => {
+    document.getElementById('start-time').value = '';
+    location.hash = liveHash();
+  });
+  document.getElementById('refresh-now').addEventListener('click', refresh);
+  document.getElementById('show-wall-voltage').addEventListener('change', redrawVrmsChart);
+  // イベント一覧の行クリックで、そのイベントが収まる表示範囲・開始時刻へジャンプする
+  // (→ eventViewWindow)。
+  document.querySelector('#events-table tbody').addEventListener('click', (ev) => {
+    const tr = ev.target.closest('tr[data-idx]');
+    if (!tr) return;
+    const e = lastEvents[Number(tr.dataset.idx)];
+    if (!e) return;
+    const { minutes, startSecVal } = eventViewWindow(e);
+    document.getElementById('minutes').value = String(minutes);
+    setStartSec(startSecVal);
+    location.hash = liveHash();
+  });
+  window.addEventListener('resize', () => refresh());
+  if (location.hash) route(); else { refresh(); scheduleAutoRefresh(); }
 });
