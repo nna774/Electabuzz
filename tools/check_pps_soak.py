@@ -3,10 +3,9 @@
 指定期間ずっと途切れず続いているかを見る（→ docs/log/2026-08-17-dashboard-pps-caption-fix.md）。
 
 `/recent` API(`lambda/api/handler.py`)は`MAX_RECENT_MINUTES=30`が上限で数時間分は
-一度に見えないので、こちらは`series/`を直接読む。`tools/README.md`の「何度も条件を
-変えて解析するときのS3キャッシュ」に従い、`get_object`だけ`.s3cache/`でキャッシュし
-（`series/`は永久保存前提なのでキャッシュが腐る心配はない）、`list_objects_v2`は
-新着バッチを見逃さないよう毎回本物のS3に通す。
+一度に見えないので、こちらは`series/`を直接読む。`tools/s3cache.py`（`tools/README.md`
+の「何度も条件を変えて解析するときのS3キャッシュ」を実装したもの）で`get_object`だけ
+`.s3cache/`にキャッシュする（`series/`は永久保存前提なのでキャッシュが腐る心配はない）。
 
 使い方（AWS認証情報とリージョンは通常のboto3の解決に従う）:
 
@@ -31,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import awsenv  # noqa: E402
+import s3cache  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lambda"))
 import store_gridfreq  # noqa: E402
@@ -40,35 +40,6 @@ import wire_gridfreq  # noqa: E402
 # 2バッチぶん強の猶予を持たせる
 GAP_THRESHOLD_S = 75.0
 LOCKED_SOURCES = (wire_gridfreq.TimebaseSource.PPS, wire_gridfreq.TimebaseSource.PPS_NTP)
-
-
-class _BytesBody:
-    def __init__(self, data: bytes):
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
-
-
-class CachingS3:
-    """get_objectだけ`.s3cache/`でキャッシュする薄いラッパー。listは毎回本物へ通す。"""
-
-    def __init__(self, s3, cache_dir: Path):
-        self._s3 = s3
-        self._cache_dir = cache_dir
-
-    def list_objects_v2(self, **kw):
-        return self._s3.list_objects_v2(**kw)
-
-    def get_object(self, Bucket: str, Key: str):
-        path = self._cache_dir / Key
-        if path.exists():
-            return {"Body": _BytesBody(path.read_bytes())}
-        resp = self._s3.get_object(Bucket=Bucket, Key=Key)
-        body = resp["Body"].read()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(body)
-        return {"Body": _BytesBody(body)}
 
 
 def main_checkout_root() -> Path:
@@ -134,10 +105,7 @@ def main() -> int:
     awsenv.ensure_region()
     bucket = resolve_bucket(args.bucket)
 
-    import boto3
-
-    cache_dir = main_checkout_root() / ".s3cache"
-    s3 = CachingS3(boto3.client("s3"), cache_dir)
+    s3 = s3cache.cached_client()
 
     print(f"対象: {fmt_us(start_us)} 〜 {fmt_us(end_us)}  bucket={bucket}", file=sys.stderr)
     keys = store_gridfreq.list_series_keys_in_range(s3, bucket, start_us, end_us)
