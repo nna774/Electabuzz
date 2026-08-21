@@ -1,10 +1,13 @@
 # 進捗
 
-新しいものが上。各行の詳細は `log/` の該当ファイルにある。
+概ね新しいものが上（`merge=union`でコンフリクトを避けているため並行セッションからの
+追記は厳密な日付順にならないことがある。気になったら日付列でソートし直せばよい）。
+各行の詳細は `log/` の該当ファイルにある。
 **このファイルは索引だ。判断の理由は各ログに、現在の結論は各設計ドキュメントにある。**
 
 | 日付 | 何が決まったか | 詳細 |
 |---|---|---|
+| 2026-08-22 | **`docs/progress.md`への並行追記が毎回コンフリクトしていたのを`.gitattributes`の`merge=union`で解消した。** 2026-08-08にPR #14とのマージで実際に衝突した実績があり、Namazu側の同じ対策([PR #123](https://github.com/nna774/NamazuHaUrokoGaNai/pull/123))をそのまま移植。トレードオフとして「新しいものが上」の厳密な日付順は保証されなくなった（気になったら手動でソートし直す運用に緩めた） | [log/2026-08-22-progress-md-union-merge.md](log/2026-08-22-progress-md-union-merge.md) |
 | 2026-08-20 | **周波数逸脱イベント多発の原因を調査し、計算バグではなく実際の系統変動と確認した。** `series/`の生バッチを直接読み、周波数(cycles由来)と電圧(`v_rms_mv`、独立な計測経路)が同時に沈んで同時に回復する物理的な波形を確認——`ELBZ_FREQ_DEV_THRESHOLD_HZ`(既定100mHz・3秒hold)が未校正のまま、この規模の実変動を拾うには敏感すぎることが原因と判明(校正自体は次のタスクとして残す)。副産物として、dashboardに`#live?m=&auto=&s=`ハッシュルーティング(Namazu方式を縮小移植)を追加し、検知イベント行クリックでその発生時刻のグラフへジャンプできるようにした | [log/2026-08-20-dashboard-event-time-hash-routing.md](log/2026-08-20-dashboard-event-time-hash-routing.md) |
 | 2026-08-17 | **dashboardの`/events`ポーリングを5分間隔に間引いた。** `refresh()`は`/recent`・`/devices`・`/events`を全て同じ10秒間隔で叩いていたが、detectイベント(周波数逸脱等の確定判定)は頻発しないためこの頻度で叩く実利が無いという指摘を受け、`/events`だけ`EVENTS_REFRESH_INTERVAL_MS`(5分)ごとに間引いた。初回ロードは必ず取得し、取得失敗時は次の10秒後に再試行する(丸ごと5分待たされない)。設計判断の変更はなし | [log/2026-08-17-dashboard-events-polling-throttle.md](log/2026-08-17-dashboard-events-polling-throttle.md) |
 | 2026-08-17 | **TE(時刻偏差)絶対値表示を`terraform apply`し、実クラウドで動作確認した。** 1 add(`electabuzz-te-anchors`テーブル)/5 change(IAMポリシー・Lambda4本の再デプロイ、`common/`同梱に伴う既存の挙動)/0 destroyでapply完了。`/recent`が実際に`te_seconds: -0.020565`(`timebase_source: PPS_NTP`・`session_id: 27`)を返すことを確認し、DynamoDBを直接scanしてアンカー行(`run_open=true`)が1件書き込まれていることも確認した。**dashboard(`dashboard/`)はterraform管理外なのを見落としており、`aws s3 sync`+CloudFront invalidationのデプロイを別途行うまで`te-canvas`が画面に出ていなかった**——ユーザー報告で気づき、`dashboard/README.md`の手順どおりデプロイして解消(`--delete`は付けていない)。断線・再起動でrunが作り直される経路は実機でまだその事象が起きていないので未確認——AC入力線を実際に抜く異常系確認(既存の未決項目)のついでに確認する | [log/2026-08-17-te-anchors-apply-verify.md](log/2026-08-17-te-anchors-apply-verify.md) |
