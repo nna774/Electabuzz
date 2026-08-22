@@ -30,7 +30,7 @@ locals {
   }
 
   # detect は series/ を読み(境界レコードの補完取得)、events/台帳へ書く。
-  # Slack設定はwatchdogと同じ値を渡す(→ docs/cloud.md「detect」)。
+  # Slack設定・ダッシュボードリンク用ドメインはwatchdogと同じ値を渡す(→ docs/cloud.md「detect」)。
   detect_env = {
     ELBZ_BUCKET                   = local.data_bucket
     NAMZ_EVENTS_TABLE             = aws_dynamodb_table.events.name
@@ -43,6 +43,7 @@ locals {
     NAMZ_SLACK_WEBHOOK_URL        = var.slack_webhook_url
     NAMZ_SLACK_CHANNEL            = var.slack_channel
     NAMZ_SLACK_MENTION            = var.slack_mention
+    NAMZ_DASHBOARD_URL            = local.custom_domain_enabled ? "https://${var.dashboard_domain}" : "https://${aws_cloudfront_distribution.dashboard.domain_name}"
   }
 
   # watchdog はS3を触らないのでELBZ_BUCKETは要らない。しきい値・Slack設定・

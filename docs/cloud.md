@@ -307,6 +307,14 @@ RoCoF・電圧異常はf_nominalに依存しないので影響しない。
 毎回通知すると同じ逸脱でSlackが埋まる。継続状況は`/events`の`last_us`で追える
 (watchdogのような定期再送は持たない)。
 
+Slack通知の「イベント」欄は、そのイベントが収まる範囲でdashboardのグラフを直接開ける
+リンクにしている(`_event_link`、`NAMZ_DASHBOARD_URL`未設定時はID文字列のまま)。
+dashboardの`#live?m=<分>&auto=<0\|1>&s=<epoch秒>`ハッシュルーティング
+(→[log/2026-08-20-dashboard-event-time-hash-routing.md](log/2026-08-20-dashboard-event-time-hash-routing.md))
+に合わせ、表示範囲・終端時刻を`dashboard/app.js`の`eventViewWindow()`と同じ式で
+計算している(`_event_view_window`)——イベント一覧の行クリックで開く範囲と、
+Slack通知のリンク先を一致させるため、計算式をPython側に複製した。
+
 しきい値は`terraform/variables.tf`の各`variable`(既定値は上表の通り)で調整できる。
 **いずれも未校正の暫定値**——実際の逸脱事例で妥当性を確認する作業がまだ残っている
 (→ [progress.md](progress.md))。

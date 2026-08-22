@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import math
 import os
 from urllib.parse import unquote_plus
 
@@ -55,6 +56,31 @@ PEAK_LABELS = {
     grid_detect.RoCoF: lambda v: f"{v * 1000:.1f} mHz/s",
     grid_detect.VoltageAnomaly: lambda v: f"{v * 100:.1f} %",
 }
+
+# dashboard/app.jsのEVENT_VIEW_MINUTES(#minutesが選べるプリセット)と同じ値。
+EVENT_VIEW_MINUTES = (1, 5, 15, 30)
+
+
+def _event_view_window(onset_us: int, last_us: int) -> tuple[int, int]:
+    """イベントが収まる表示範囲(分)と、dashboardの`#live?...&s=`用の終端時刻(epoch秒)を計算する。
+    dashboard/app.jsのeventViewWindow()(イベント行クリック時の自動ジャンプ)と同じ式——
+    通知のリンク先とdashboard上の操作で見える範囲を一致させるため、計算をここに複製する。"""
+    duration_s = max(1.0, (last_us - onset_us) / 1e6)
+    padding_s = max(30.0, duration_s * 0.5)
+    needed_minutes = (duration_s + padding_s * 2) / 60
+    minutes = next((m for m in EVENT_VIEW_MINUTES if m >= needed_minutes), EVENT_VIEW_MINUTES[-1])
+    end_sec = math.ceil(last_us / 1e6 + padding_s)
+    return minutes, end_sec
+
+
+def _event_link(eid: str, onset_us: int, last_us: int) -> str:
+    """イベントIDを、そのイベントが収まる範囲でdashboardのグラフを開くSlack mrkdwnリンクにする。
+    NAMZ_DASHBOARD_URL未設定ならIDのまま返す(watchdogの_device_fieldと同じ考え方)。"""
+    base = os.environ.get("NAMZ_DASHBOARD_URL", "").rstrip("/")
+    if not base:
+        return eid
+    minutes, end_sec = _event_view_window(onset_us, last_us)
+    return f"<{base}/#live?m={minutes}&auto=0&s={end_sec}|{eid}>"
 
 
 def handler(event, context):
@@ -99,7 +125,8 @@ def _process(key: str) -> None:
         n.notify(
             EVENT_TITLES[d.event_type],
             f"device *{h.device_id:04d}* で検知。ピーク値 *{label}*。",
-            {"デバイス": f"{h.device_id:04d}", "検知時刻": _fmt_time(d.onset_us), "イベント": eid},
+            {"デバイス": f"{h.device_id:04d}", "検知時刻": _fmt_time(d.onset_us),
+             "イベント": _event_link(eid, d.onset_us, d.last_us)},
         )
 
 
