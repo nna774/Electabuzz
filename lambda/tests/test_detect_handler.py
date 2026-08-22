@@ -111,6 +111,54 @@ def test_non_series_key_is_ignored(monkeypatch):
     assert fake.calls == []
 
 
+def test_notify_event_field_links_to_dashboard_graph(monkeypatch):
+    """通知の「イベント」欄は、そのイベントが収まる範囲でグラフを開けるSlack mrkdwn
+    リンクになる(→ dashboard/app.jsのeventViewWindow()と同じ式をhandler側で複製、
+    docs/cloud.md「detect」)。"""
+    h, fake = _handler(monkeypatch)
+    monkeypatch.setenv("NAMZ_DASHBOARD_URL", "https://dash.example/")
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: _batch_with_freq_deviation())
+    monkeypatch.setattr(h.grid_events, "record",
+                        lambda device_id, event_type, onset, last, peak: (
+                            (f"{device_id:04d}-{event_type}-0", True)))
+
+    h.handler(_event(), None)
+
+    assert len(fake.calls) == 1
+    field = fake.calls[0]["fields"]["イベント"]
+    assert field.startswith("<https://dash.example/#live?m=")
+    assert field.endswith("|0001-freq_deviation-0>")
+
+
+def test_event_link_without_dashboard_url_falls_back_to_plain_id(monkeypatch):
+    h, fake = _handler(monkeypatch)
+    monkeypatch.delenv("NAMZ_DASHBOARD_URL", raising=False)
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: _batch_with_freq_deviation())
+    monkeypatch.setattr(h.grid_events, "record",
+                        lambda device_id, event_type, onset, last, peak: (
+                            (f"{device_id:04d}-{event_type}-0", True)))
+
+    h.handler(_event(), None)
+
+    assert fake.calls[0]["fields"]["イベント"] == "0001-freq_deviation-0"
+
+
+def test_event_view_window_matches_dashboard_presets():
+    """dashboard/app.jsのEVENT_VIEW_MINUTES([1, 5, 15, 30])・eventViewWindow()の式と
+    一致することを、短い/長いイベントの両端で確認する。"""
+    h = load_handler("detect")
+
+    # 短いイベント(1秒未満): 余白は最低30秒なので (1 + 30*2)/60 = ~1.03分 -> 5分プリセットに丸まる
+    minutes, end_sec = h._event_view_window(onset_us=0, last_us=500_000)
+    assert minutes == 5
+    assert end_sec == 31  # ceil(0.5 + 30)
+
+    # 長いイベント(200秒): 余白はduration*0.5=100秒、(200+200)/60 ≒ 6.7分 -> 15分プリセット
+    minutes, end_sec = h._event_view_window(onset_us=0, last_us=200_000_000)
+    assert minutes == 15
+    assert end_sec == 300  # ceil(200 + 100)
+
+
 def test_no_nominal_freq_skips_freq_deviation_but_keeps_others(monkeypatch):
     h, fake = _handler(monkeypatch)
 
