@@ -30,9 +30,12 @@ locals {
   }
 
   # detect は series/ を読み(境界レコードの補完取得)、events/台帳へ書く。
+  # NAMZ_DEVICES_TABLEは生存台帳のprev_batch_key読み取り(_prev_boundary_sample_batch、
+  # devices.get_device)に使う——ListObjectsV2を置き換えた分(2026-08-23)。
   # Slack設定・ダッシュボードリンク用ドメインはwatchdogと同じ値を渡す(→ docs/cloud.md「detect」)。
   detect_env = {
     ELBZ_BUCKET                   = local.data_bucket
+    NAMZ_DEVICES_TABLE            = aws_dynamodb_table.devices.name
     NAMZ_EVENTS_TABLE             = aws_dynamodb_table.events.name
     ELBZ_FREQ_DEV_THRESHOLD_HZ    = tostring(var.freq_deviation_threshold_hz)
     ELBZ_FREQ_DEV_HOLD_RECORDS    = tostring(var.freq_deviation_hold_records)

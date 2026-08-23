@@ -274,7 +274,19 @@ Namazuのdetect(地震の震度をFFT窓で再計算する)とは判定の性質
 
 - `series/`へのS3 ObjectCreatedで起動。直前バッチの最後の1レコードだけを追加
   取得し、境界をまたぐ周波数計算の連続性を確保する(それより過去には遡らない
-  ——遡ると数十秒前に確定済みのrunを毎回再検知してSlackを埋める)
+  ——遡ると数十秒前に確定済みのrunを毎回再検知してSlackを埋める)。直前バッチの
+  S3キーは生存台帳(`NAMZ_DEVICES_TABLE`、必須)の`prev_batch_key`属性を`GetItem`
+  一発で読むだけで分かる(`batch_uplink.devices.record_batch`が`track_prev_key=True`
+  でバッチ受信のたびにアトミックに更新している)。**以前は`ListObjectsV2`で
+  時間窓を探しに行っており、バッチ到着(実測30秒間隔)のたびに無期限でListが
+  飛び続けS3コストを底上げしていた**ため置き換えた
+  (→ [log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md))。
+  フェッチした直前バッチが実際に「直前」として妥当な間隔(1レコード分＝
+  nominal_dtの0.5〜2倍)かを確認してから使う——プレースホルダの安全策では
+  なく、レビューで見つかった実際の欠陥(レースで1つ古いバッチが返っても
+  「現在より過去」というだけの判定では素通りしてしまい、電圧異常判定には
+  周波数側のような時間差ガードが無いため誤検知しうる)を塞ぐためのもの
+  (→ [log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md))
 - しきい値判定は`lambda/common/grid_detect.py`の純粋関数(`analyze`)に集約
   (DynamoDB・Slackに触れずテストできる)
 
