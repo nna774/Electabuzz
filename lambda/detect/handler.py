@@ -9,7 +9,10 @@ Namazuのdetect(地震の震度をFFT窓で再計算する)とは判定の性質
 - 直前バッチの最後の1レコードだけを追加取得し、境界をまたぐ周波数計算の連続性を
   確保する。**それより過去には遡らない**——遡ると、数十秒前に既に確定済みの
   runを毎回再解析してSlackを埋める（`grid_events.record`のセッションマージが
-  時間切れ後は「新規」と判断してしまうため）
+  時間切れ後は「新規」と判断してしまうため）。直前バッチのキーは生存台帳の
+  `prev_batch_key`(`batch_uplink.devices`、`track_prev_key=True`)から`GetItem`で
+  引く。以前はS3の`ListObjectsV2`で探していたが、バッチ到着(実測30秒間隔)の
+  たびに無期限でListが飛び続けコストを底上げしていたため置き換えた
 - しきい値判定そのものは`grid_detect.analyze`(副作用の無い純粋関数)に委ねる
 - 新規セッションだけ通知する。継続中の延長は`/events`のlast_usで追える
   （watchdogのような定期再送は持たない——detectはイベント駆動で、継続を
@@ -26,10 +29,9 @@ from urllib.parse import unquote_plus
 
 import boto3
 
-from batch_uplink import notify
+from batch_uplink import devices, notify
 
 import s3keys
-import store_gridfreq
 import wire_gridfreq
 from common import grid_detect, grid_events
 
@@ -138,17 +140,45 @@ def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gr
     バッチ内で既に確定済みのrunを毎回このバッチの到着のたびに再評価してしまい、
     `grid_events.record`が(セッションマージの時間窓を過ぎていれば)「新規」と
     誤判定してSlackを埋める。
+
+    直前バッチのキーは生存台帳(`NAMZ_DEVICES_TABLE`)の`prev_batch_key`から
+    `GetItem`一発で分かる(ingestが`record_batch(..., track_prev_key=True)`で
+    バッチ受信のたびにアトミックに更新している)。以前は`ListObjectsV2`で
+    時間窓を探しに行っていたが、バッチ到着(実測30秒間隔)のたびに無期限で
+    Listが飛び続けS3コストを底上げしていたため置き換えた
+    (→ docs/log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)。
+
+    `ingest`は`series/`へのS3 PUT(このLambdaを起動する側)の**後**に
+    `devices.record_batch`を呼んでいるので、稀に`prev_batch_key`がまだ
+    このバッチぶんに更新されていない(＝1つ前の値のまま、つまりN-1ではなく
+    さらに1つ古いN-2を指す)状態でここに来ることがありうる。**N-2は現在の
+    バッチより過去であることに変わりは無いので、「未来/同時刻でないか」
+    だけの判定では素通りしてしまう**(レビュー指摘、2026-08-23)。それを
+    使ってしまうと、周波数側は`grid_detect.samples_from_batches`の
+    `dt_actual`レンジチェック(0.5〜2倍のnominal_dt)で弾かれて実害が無いが、
+    **電圧異常判定にはその時間差ガードが無い**ため、約1バッチ分(実測30秒)の
+    欠測を挟んでいるにもかかわらず連続runとして誤って繋がり、電圧異常を
+    誤検知しうる。そのため「直前バッチの末尾から現在バッチの先頭までの間隔が
+    1レコード分(nominal_dt)として妥当な範囲(0.5〜2倍)に収まっているか」を
+    ここで検証する——`samples_from_batches`が周波数側で使っているのと同じ
+    レンジをフェッチの時点で適用することで、電圧異常側にもガードが効くように
+    している。外れた場合は「直前バッチ無し」と同じ`None`扱いに落ちる。
     """
-    keys = store_gridfreq.list_series_keys_in_range(
-        s3, bucket, h.batch_start_us - 40_000_000, h.batch_start_us - 1)
-    want = f"{h.device_id:04d}-"
-    keys = [k for k in keys if k.rsplit("/", 1)[-1].startswith(want)]
-    if not keys:
+    item = devices.get_device(h.device_id)
+    key = item.get("prev_batch_key") if item else None
+    if not key:
         return None
-    prev = wire_gridfreq.parse(s3.get_object(Bucket=bucket, Key=keys[-1])["Body"].read())
+    try:
+        prev = wire_gridfreq.parse(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    except Exception:  # noqa: BLE001
+        return None
     if not prev.records:
         return None
     last_t = prev.timestamps_us()[-1]
+    nominal_dt = 1000.0 / h.record_rate_mhz if h.record_rate_mhz > 0 else None
+    gap_s = (h.batch_start_us - last_t) / 1e6
+    if nominal_dt is None or not (0.5 * nominal_dt <= gap_s <= 2.0 * nominal_dt):
+        return None
     last_r = prev.records[-1]
     tail_header = dataclasses.replace(prev.header, batch_start_us=last_t, record_count=1)
     return wire_gridfreq.Batch(header=tail_header, records=(last_r,))

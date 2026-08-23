@@ -173,13 +173,18 @@ def _record_liveness(device_id: int, batch_start_us: int, key: str, fw_version: 
     Namazu の判断をそのまま踏襲している。
 
     テーブル未設定なら黙って何もしない(単体テスト等、DynamoDBに触れない環境向け)。
+
+    `track_prev_key=True`: detect(`_prev_boundary_sample_batch`)がバッチ境界を
+    またぐ周波数計算の連続性のために直前バッチを引けるよう、生存台帳に
+    `prev_batch_key`を残す(→ docs/batch-uplink.md「バージョン分岐」)。
+    Namazuはこの引数を使わないのでデフォルトFalseのまま。
     """
     if not os.environ.get("NAMZ_DEVICES_TABLE"):
         return
     try:
         devices.record_batch(device_id, batch_start_us,
                              int(time.time() * 1e6), last_batch_key=key,
-                             fw_version=fw_version)
+                             fw_version=fw_version, track_prev_key=True)
     except Exception as e:  # noqa: BLE001
         print(f"devices.record_batch failed: {e!r}")
 

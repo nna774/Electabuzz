@@ -1,8 +1,15 @@
 # batch-uplink: 共通ライブラリの切り出し
 
-> **状態（2026-08-11）**: **切り出しは完了し、以後 Namazu 側で18回タグを切っている。**
+> **状態（2026-08-23）**: **切り出しは完了し、以後 Namazu 側で18回タグを切っている。**
 > [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれた
-> のが最初で、**現在の pin は `v2.12.0`。Namazu も Electabuzz も同じタグを指す**のは変わらない。
+> のが最初。**Electabuzz の現在の pin は `v3.1.0`。** 各プロジェクトはタグさえ固定していれば
+> 自分が使いたい機能を含む版を指すだけでよく、**相手が今どのタグを指しているかはそもそも
+> 気にする必要が無い**（下記「タグで pin しろ」参照。ブランチ追従さえしていなければ
+> 相手の変更が黙って混ざることは無い）。`v3.1.0`は`devices.record_batch()`に
+> Electabuzz detect固有のオプトイン引数`track_prev_key`を足した版で、Namazu側は
+> 使わない(デフォルトFalseで挙動不変)ため今回タグを追従していないが、それは
+> 特筆すべき事態ではない。経緯は
+> [log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)。
 > `v1.1.0`〜`v2.12.0` はいずれも Namazu が OTA・リモート再起動・生存台帳表示・実機で踏んだ
 > 障害(WDTパニックでの取りこぼし、ヒープ断片化)の対策のために追加したもので、
 > `v1.x` は全て `Uploader` の新規オプトイン引数(既定値で従来どおり)か新規メソッドだった。
@@ -26,10 +33,10 @@
 > [log/2026-08-07-goertzel-cpp-port.md](log/2026-08-07-goertzel-cpp-port.md)。
 
 ```ini
-lib_deps = https://github.com/nna774/batch-uplink.git#v2.12.0
+lib_deps = https://github.com/nna774/batch-uplink.git#v3.1.0
 ```
 ```bash
-pip install "git+https://github.com/nna774/batch-uplink@v2.12.0"
+pip install "git+https://github.com/nna774/batch-uplink@v3.1.0"
 ```
 
 ## 実コードの調査結果: 流用境界
@@ -47,7 +54,7 @@ pip install "git+https://github.com/nna774/batch-uplink@v2.12.0"
 | [lambda/common/notify.py](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/lambda/common/notify.py) | `Notifier` 抽象と Slack 実装。通知先は全て env 駆動。**`events.py` は切り出さない**(下記) |
 
 **Electabuzzでもspool/retry機構は無改造でそのまま効いている**（`firmware/platformio.ini`で
-`batch-uplink.git#v2.12.0`をpinし、`firmware/src/main.cpp`で`Uploader`を生成・`enqueue()`/
+`batch-uplink.git#v3.1.0`をpinし、`firmware/src/main.cpp`で`Uploader`を生成・`enqueue()`/
 `pump()`を呼ぶだけ。独自実装は無い）。**保持できる期間はNamazuより長い**（概算、実機未検証）。
 `firmware/platformio.ini`は`board_build.partitions = default_16MB.csv`（Arduino既定の
 16MB分割）を使っており、spiffs領域は`0x360000`＝約3.375MB。GFRQは64Bヘッダ+12B×30レコード
@@ -358,11 +365,23 @@ submodule の SHA は版として読めない。
 **壊さない**ための手段にすぎない。焼き直して確認できるなら触ってよい。
 
 **切り出し直後は v1.1.0 が存在しなかった。** 両プロジェクトが同じ v1.0.0 を指していた。
-**その後 Namazu が OTA・実機障害対策等のために v1.1.0〜v2.12.0 を切っており
+**その後 Namazu が OTA・実機障害対策等のために v1.1.0〜v3.0.0 を切っており
 （`v2.0.0` だけはヘッダ配列のnullptr終端化という破壊的変更を含む）、
-現在の pin は両プロジェクトとも v2.12.0。**「バージョンを分けない」という決定の意味は
-「Electabuzz 用に無理にタグを切らない」ことであって、「タグが増えない」ことではない
-——増やすべき側(実機とテストが揃っている Namazu)が増やすぶんには、この判断と矛盾しない。
+Electabuzz は v3.0.0 まで これに追従して同じタグを指してきた。**
+ただし「同じタグを指す」こと自体を目的にしたことは無い。**pin は各プロジェクトが
+独立に決めるもので、相手が今どのタグを指しているかはそもそも気にする対象ではない。**
+これまで一致していたのは、バージョンアップが常に Namazu 発でElectabuzzがそのまま
+追従していた(自分から独自の理由でタグを切ったことが無かった)という結果にすぎず、
+「揃える」という規範があったわけではない。
+
+**v3.1.0(2026-08-23)は Electabuzz 発の要件(`track_prev_key`)で切った初めてのタグ。**
+`devices.record_batch()`のこのオプトイン引数はElectabuzz detect固有の要件
+（S3の`ListObjectsV2`コスト削減、→
+[log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)）で、
+Namazu側に相談の上「Namazuは使わない属性が増えるだけなのでデフォルトFalseのオプトインにし、
+Namazu側は今回追従不要」と合意している。Namazu側が`track_prev_key`相当を使いたくなれば
+その時にNamazu側もv3.1.0以降へ上げればよいだけで、Electabuzz側から見ても
+Namazu側のpinが今どこにあるかを追いかける必要は無い。
 
 ### タグで pin しろ。ブランチ追従にするな
 
@@ -375,8 +394,8 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
 **結合が不可視**になる。「動いていたものが、何も変えていないのに再ビルドで壊れる」
 という最悪の壊れ方をする。
 
-- `lib_deps = ...git#v2.12.0` — **タグ**を指す
-- `requirements.txt` に `git+https://.../batch-uplink@v2.12.0` — **タグ**を指す
+- `lib_deps = ...git#v3.1.0` — **タグ**を指す
+- `requirements.txt` に `git+https://.../batch-uplink@v3.1.0` — **タグ**を指す
 - 共有レポ側で **タグを打ち替えない**(打ち替えたら pin の意味が消える)
 
 ---
@@ -389,8 +408,9 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
   Python は `auth`・`devices`・`notify`・`s3util`。**これ以上は入れるな。**
   ドメインが混ざった瞬間に共有ライブラリとしての価値が消える
   (`WireFormat.h` が入っていないのはこの原則どおりの帰結だ)
-- **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v2.12.0）。**自分の都合でしか動かさない**
-- **`Electabuzz`**: `batch-uplink` に pin（現在 v2.12.0。Namazu と同じタグを指す）。
+- **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v3.0.0）。**自分の都合でしか動かさない**
+- **`Electabuzz`**: `batch-uplink` に pin（現在 v3.1.0。`track_prev_key`が欲しくて
+  自分の都合で上げた——Namazu側のpin状況は気にしていない。上記「バージョン分岐」参照）。
   `lib/GridFreq/`(GFRQワイヤ形式)、`lib/Goertzel/`(単一ビンDFT)、
   `wire_gridfreq`、`tools/gridfreq/`(参照実装 + backtest)、独立 Terraform state
 - **ワイヤ形式は `batch-uplink` に入れない。** `Batch` がレイアウト非依存になるので、

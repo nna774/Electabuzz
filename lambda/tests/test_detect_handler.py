@@ -3,8 +3,7 @@
 しきい値判定そのものはgrid_detect.analyzeの純粋関数テストで確認済みなので、
 ここでは「配線が正しいか」(S3イベントからkeyを拾い、新規セッションだけ通知するか)
 だけを見る。S3・DynamoDBには触れない——`wire_gridfreq.parse`・
-`store_gridfreq.list_series_keys_in_range`・`grid_events.record`・`notify.from_env`を
-すべて差し替える。
+`devices.get_device`・`grid_events.record`・`notify.from_env`をすべて差し替える。
 """
 
 from __future__ import annotations
@@ -61,8 +60,7 @@ def _handler(monkeypatch):
     h = load_handler("detect")
     monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
     monkeypatch.setattr(h.s3, "get_object", lambda Bucket, Key: {"Body": FakeBody(b"dummy")})
-    monkeypatch.setattr(h.store_gridfreq, "list_series_keys_in_range",
-                        lambda s3, bucket, start, end: [])  # 直前バッチ無し
+    monkeypatch.setattr(h.devices, "get_device", lambda device_id: None)  # 直前バッチ無し
     fake_notifier = FakeNotifier()
     monkeypatch.setattr(h.notify, "from_env", lambda: fake_notifier)
     return h, fake_notifier
@@ -98,6 +96,82 @@ def test_continuing_session_does_not_renotify(monkeypatch):
     h.handler(_event(), None)
 
     assert fake.calls == []
+
+
+def test_prev_boundary_sample_batch_uses_devices_prev_key(monkeypatch):
+    """生存台帳のprev_batch_keyをGetItemで読み、get_object一発で直前バッチの
+    末尾レコードを取れることを確認する(→ ListObjectsV2を置き換えた変更)。"""
+    h = load_handler("detect")
+    monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
+    prev_batch = Batch(header=_header(batch_start_us=0, record_count=2), records=(
+        Record(cycles_q16=0, v_rms_mv=10_300, flags=0),
+        Record(cycles_q16=65536, v_rms_mv=10_300, flags=0),
+    ))
+    seen_keys = []
+    monkeypatch.setattr(h.devices, "get_device",
+                        lambda device_id: {"prev_batch_key": "series/2026/08/23/00/0001-x.bin"})
+    monkeypatch.setattr(h.s3, "get_object",
+                        lambda Bucket, Key: (seen_keys.append(Key), {"Body": FakeBody(b"dummy")})[1])
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: prev_batch)
+
+    cur_header = _header(batch_start_us=2_000_000, record_count=1)
+    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+
+    assert seen_keys == ["series/2026/08/23/00/0001-x.bin"]
+    assert tail is not None
+    assert tail.header.record_count == 1
+    assert tail.records[0].cycles_q16 == prev_batch.records[-1].cycles_q16
+
+
+def test_prev_boundary_sample_batch_none_when_no_prev_key(monkeypatch):
+    h = load_handler("detect")
+    monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
+    monkeypatch.setattr(h.devices, "get_device", lambda device_id: {})  # prev_batch_key無し
+
+    tail = h._prev_boundary_sample_batch("elbz-test-bucket", _header(batch_start_us=2_000_000))
+
+    assert tail is None
+
+
+def test_prev_boundary_sample_batch_rejects_stale_two_batches_back(monkeypatch):
+    """レビュー指摘(2026-08-23): ingestのS3 PUT(detect起動)とdevices.record_batchの
+    書き込み順序次第で、prev_batch_keyがこのバッチぶんにまだ更新されておらず、
+    1つ前(N-1)ではなくさらに1つ古い(N-2)キーを指すことがありうる。N-2も現在の
+    バッチより過去であることに変わりは無いので、「未来/同時刻でないか」だけの
+    判定では弾けない——直前バッチとして妥当な間隔(nominal_dtの0.5〜2倍)かどうかで
+    弾けることを確認する(直さないと、電圧異常判定には周波数側のようなdt_actual
+    ガードが無いため、約1バッチ分の欠測を挟んだ連続runとして誤検知しうる)。"""
+    h = load_handler("detect")
+    monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
+    # N-2のバッチ: 現在のバッチ(31秒時点)よりずっと前(0秒)に終わっている
+    stale_prev = Batch(header=_header(batch_start_us=0, record_count=1),
+                       records=(Record(cycles_q16=0, v_rms_mv=10_300, flags=0),))
+    monkeypatch.setattr(h.devices, "get_device",
+                        lambda device_id: {"prev_batch_key": "series/2026/08/23/00/0001-x.bin"})
+    monkeypatch.setattr(h.s3, "get_object", lambda Bucket, Key: {"Body": FakeBody(b"dummy")})
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: stale_prev)
+
+    cur_header = _header(batch_start_us=31_000_000, record_count=1)
+    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+
+    assert tail is None
+
+
+def test_prev_boundary_sample_batch_rejects_future_prev(monkeypatch):
+    """prev_batch_keyが現在のバッチと同時刻以降を指す(通常起きないはずの)異常系。"""
+    h = load_handler("detect")
+    monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
+    future_prev = Batch(header=_header(batch_start_us=5_000_000, record_count=1),
+                        records=(Record(cycles_q16=0, v_rms_mv=10_300, flags=0),))
+    monkeypatch.setattr(h.devices, "get_device",
+                        lambda device_id: {"prev_batch_key": "series/2026/08/23/00/0001-x.bin"})
+    monkeypatch.setattr(h.s3, "get_object", lambda Bucket, Key: {"Body": FakeBody(b"dummy")})
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: future_prev)
+
+    cur_header = _header(batch_start_us=1_000_000, record_count=1)
+    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+
+    assert tail is None
 
 
 def test_non_series_key_is_ignored(monkeypatch):

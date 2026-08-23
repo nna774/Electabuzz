@@ -239,6 +239,9 @@ def test_records_ledger_when_table_set(h, golden, monkeypatch):
     (args, kw), = called
     assert args[0] == 2 and args[1] == 1750000000123456
     assert kw["last_batch_key"] == "series/2025/06/15/15/0002-00001750000000123456.bin"
+    # detectがGetItemでprev_batch_keyを直接引けるように、生存台帳への書き込みで
+    # 毎回退避させる(→ docs/log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)
+    assert kw["track_prev_key"] is True
 
 
 def test_ledger_failure_does_not_fail_the_batch(h, golden, monkeypatch):
