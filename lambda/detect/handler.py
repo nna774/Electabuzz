@@ -150,10 +150,19 @@ def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gr
 
     `ingest`は`series/`へのS3 PUT(このLambdaを起動する側)の**後**に
     `devices.record_batch`を呼んでいるので、稀に`prev_batch_key`がまだ
-    このバッチぶんに更新されていない(＝1つ前の値のまま)状態でここに来る
-    ことがありうる。実害は無い——その場合は単に古いキーが返るので、下の
-    `batch_start_us`チェックで弾かれ、Listだった頃の「直前バッチが見つからない」
-    場合と同じ`None`扱いに落ちる。
+    このバッチぶんに更新されていない(＝1つ前の値のまま、つまりN-1ではなく
+    さらに1つ古いN-2を指す)状態でここに来ることがありうる。**N-2は現在の
+    バッチより過去であることに変わりは無いので、「未来/同時刻でないか」
+    だけの判定では素通りしてしまう**(レビュー指摘、2026-08-23)。それを
+    使ってしまうと、周波数側は`grid_detect.samples_from_batches`の
+    `dt_actual`レンジチェック(0.5〜2倍のnominal_dt)で弾かれて実害が無いが、
+    **電圧異常判定にはその時間差ガードが無い**ため、約1バッチ分(実測30秒)の
+    欠測を挟んでいるにもかかわらず連続runとして誤って繋がり、電圧異常を
+    誤検知しうる。そのため「直前バッチの末尾から現在バッチの先頭までの間隔が
+    1レコード分(nominal_dt)として妥当な範囲(0.5〜2倍)に収まっているか」を
+    ここで検証する——`samples_from_batches`が周波数側で使っているのと同じ
+    レンジをフェッチの時点で適用することで、電圧異常側にもガードが効くように
+    している。外れた場合は「直前バッチ無し」と同じ`None`扱いに落ちる。
     """
     item = devices.get_device(h.device_id)
     key = item.get("prev_batch_key") if item else None
@@ -163,9 +172,13 @@ def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gr
         prev = wire_gridfreq.parse(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
     except Exception:  # noqa: BLE001
         return None
-    if not prev.records or prev.header.batch_start_us >= h.batch_start_us:
+    if not prev.records:
         return None
     last_t = prev.timestamps_us()[-1]
+    nominal_dt = 1000.0 / h.record_rate_mhz if h.record_rate_mhz > 0 else None
+    gap_s = (h.batch_start_us - last_t) / 1e6
+    if nominal_dt is None or not (0.5 * nominal_dt <= gap_s <= 2.0 * nominal_dt):
+        return None
     last_r = prev.records[-1]
     tail_header = dataclasses.replace(prev.header, batch_start_us=last_t, record_count=1)
     return wire_gridfreq.Batch(header=tail_header, records=(last_r,))
