@@ -2,12 +2,13 @@
 
 > **状態（2026-08-23）**: **切り出しは完了し、以後 Namazu 側で18回タグを切っている。**
 > [batch-uplink](https://github.com/nna774/batch-uplink) が public で立ち `v1.0.0` が打たれた
-> のが最初。**Electabuzz の現在の pin は `v3.1.0`。** ここで初めて**Namazu(`v3.0.0`)とは
-> 違うタグを指す**ようになった——`v3.1.0`は`devices.record_batch()`に
-> `track_prev_key`というElectabuzz detect固有のオプトイン引数を足しただけで、
-> Namazu側は使わない(デフォルトFalseで挙動不変)。「バージョンを分けない」の意味は
-> 常に「無理に分けない」であって「絶対に分けない」ではない、という整理は下記
-> 「バージョン分岐」節のとおり。詳細は
+> のが最初。**Electabuzz の現在の pin は `v3.1.0`。** 各プロジェクトはタグさえ固定していれば
+> 自分が使いたい機能を含む版を指すだけでよく、**相手が今どのタグを指しているかはそもそも
+> 気にする必要が無い**（下記「タグで pin しろ」参照。ブランチ追従さえしていなければ
+> 相手の変更が黙って混ざることは無い）。`v3.1.0`は`devices.record_batch()`に
+> Electabuzz detect固有のオプトイン引数`track_prev_key`を足した版で、Namazu側は
+> 使わない(デフォルトFalseで挙動不変)ため今回タグを追従していないが、それは
+> 特筆すべき事態ではない。経緯は
 > [log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)。
 > `v1.1.0`〜`v2.12.0` はいずれも Namazu が OTA・リモート再起動・生存台帳表示・実機で踏んだ
 > 障害(WDTパニックでの取りこぼし、ヒープ断片化)の対策のために追加したもので、
@@ -366,19 +367,21 @@ submodule の SHA は版として読めない。
 **切り出し直後は v1.1.0 が存在しなかった。** 両プロジェクトが同じ v1.0.0 を指していた。
 **その後 Namazu が OTA・実機障害対策等のために v1.1.0〜v3.0.0 を切っており
 （`v2.0.0` だけはヘッダ配列のnullptr終端化という破壊的変更を含む）、
-Electabuzz は v3.0.0 まで両プロジェクトとも同じタグを指す運用を続けていた。**
-「バージョンを分けない」という決定の意味は「Electabuzz 用に無理にタグを切らない」
-ことであって、「タグが増えない」ことでも「常に同じタグを指す」ことでもない
-——増やすべき側(実機とテストが揃っている Namazu)が増やすぶんには、この判断と矛盾しない。
+Electabuzz は v3.0.0 まで これに追従して同じタグを指してきた。**
+ただし「同じタグを指す」こと自体を目的にしたことは無い。**pin は各プロジェクトが
+独立に決めるもので、相手が今どのタグを指しているかはそもそも気にする対象ではない。**
+これまで一致していたのは、バージョンアップが常に Namazu 発でElectabuzzがそのまま
+追従していた(自分から独自の理由でタグを切ったことが無かった)という結果にすぎず、
+「揃える」という規範があったわけではない。
 
-**`v3.1.0`(2026-08-23)で初めて Electabuzz 発の機能追加タグを切り、Namazu とは違うタグを
-指すようになった。** `devices.record_batch()`の`track_prev_key`オプトイン引数は
-Electabuzz detect固有の要件（S3の`ListObjectsV2`コスト削減、→
+**v3.1.0(2026-08-23)は Electabuzz 発の要件(`track_prev_key`)で切った初めてのタグ。**
+`devices.record_batch()`のこのオプトイン引数はElectabuzz detect固有の要件
+（S3の`ListObjectsV2`コスト削減、→
 [log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md](log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)）で、
 Namazu側に相談の上「Namazuは使わない属性が増えるだけなのでデフォルトFalseのオプトインにし、
-Namazu側は今回追従不要」と合意している。**同じタグを指す運用がデフォルトであることは
-変わらない**——Namazuが実際に`track_prev_key`を使いたくなった時点で、通常どおり
-両者揃えれば足りる。
+Namazu側は今回追従不要」と合意している。Namazu側が`track_prev_key`相当を使いたくなれば
+その時にNamazu側もv3.1.0以降へ上げればよいだけで、Electabuzz側から見ても
+Namazu側のpinが今どこにあるかを追いかける必要は無い。
 
 ### タグで pin しろ。ブランチ追従にするな
 
@@ -406,8 +409,8 @@ Electabuzz のために共有レポへ入れた変更が、**地震計の次回�
   ドメインが混ざった瞬間に共有ライブラリとしての価値が消える
   (`WireFormat.h` が入っていないのはこの原則どおりの帰結だ)
 - **`NamazuHaUrokoGaNai`**: `batch-uplink` に pin（現在 v3.0.0）。**自分の都合でしか動かさない**
-- **`Electabuzz`**: `batch-uplink` に pin（現在 v3.1.0。`track_prev_key`追加分だけ
-  Namazuより先行——上記「バージョン分岐」参照）。
+- **`Electabuzz`**: `batch-uplink` に pin（現在 v3.1.0。`track_prev_key`が欲しくて
+  自分の都合で上げた——Namazu側のpin状況は気にしていない。上記「バージョン分岐」参照）。
   `lib/GridFreq/`(GFRQワイヤ形式)、`lib/Goertzel/`(単一ビンDFT)、
   `wire_gridfreq`、`tools/gridfreq/`(参照実装 + backtest)、独立 Terraform state
 - **ワイヤ形式は `batch-uplink` に入れない。** `Batch` がレイアウト非依存になるので、
