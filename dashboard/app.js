@@ -539,28 +539,32 @@ function redrawVrmsChart() {
 async function refresh() {
   const minutes = document.getElementById('minutes').value;
   const sec = startSec();
+  // 頻発しないイベントなので、他の指標と違いEVENTS_REFRESH_INTERVAL_MSごとに間引く。
+  const fetchEvents = Date.now() - lastEventsFetchedAt >= EVENTS_REFRESH_INTERVAL_MS;
   try {
-    const series = await apiGet(`/recent?minutes=${minutes}${sec ? `&start=${sec * 1e6}` : ''}`);
+    // /recent・/devices・/eventsは互いに依存しないので並行に投げる
+    // (直列awaitだと1回のrefreshが3リクエストぶんの合計待ち時間になっていた)。
+    // /devices・/eventsは補助情報なので、個別にcatchして失敗をnullへ落とす
+    // (取得できなくても、まだ立てていない環境・一時的な失敗でメインのグラフ・
+    // ステータス表示は妨げない)。
+    const [series, devicesResp, eventsResp] = await Promise.all([
+      apiGet(`/recent?minutes=${minutes}${sec ? `&start=${sec * 1e6}` : ''}`),
+      apiGet('/devices').catch(() => null),
+      fetchEvents ? apiGet('/events?limit=20').catch(() => null) : Promise.resolve(null),
+    ]);
     drawFreqChart(document.getElementById('freq-canvas'), series);
     const showWall = document.getElementById('show-wall-voltage').checked;
     drawVrmsChart(document.getElementById('vrms-canvas'), series, showWall);
     drawTeChart(document.getElementById('te-canvas'), series);
-    // 生存台帳(/devices)は補助情報。取得できなくても(まだ立てていない環境・
-    // 一時的な失敗)メインのグラフ・ステータス表示は妨げない。
-    let device = null;
-    try {
-      const d = await apiGet('/devices');
-      device = (d.devices || []).find((x) => x.device_id === series.latest?.device_id) || d.devices?.[0] || null;
-    } catch (e) { /* 補助情報なので無視 */ }
-    // detectイベント(/events)も補助情報。取得失敗時は直前の表示を残す
-    // (空扱いで上書きしない——「イベント無し」と「取得できなかった」を混同しない)。
-    // 頻発しないイベントなので、他の指標と違いEVENTS_REFRESH_INTERVAL_MSごとに間引く。
-    if (Date.now() - lastEventsFetchedAt >= EVENTS_REFRESH_INTERVAL_MS) {
-      try {
-        const ev = await apiGet('/events?limit=20');
-        renderEvents(ev.events || []);
-        lastEventsFetchedAt = Date.now();
-      } catch (e) { /* 補助情報なので無視(失敗時は次回の10秒後に再試行) */ }
+    const device = devicesResp
+      ? (devicesResp.devices || []).find((x) => x.device_id === series.latest?.device_id)
+        || devicesResp.devices?.[0] || null
+      : null;
+    // イベント取得失敗時は直前の表示を残す(空扱いで上書きしない——
+    // 「イベント無し」と「取得できなかった」を混同しない。次回の10秒後に再試行)。
+    if (fetchEvents && eventsResp) {
+      renderEvents(eventsResp.events || []);
+      lastEventsFetchedAt = Date.now();
     }
     lastSeries = series;
     lastDevice = device;
