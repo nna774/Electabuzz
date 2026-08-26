@@ -8,8 +8,16 @@ Namazu の `lambda/common/store.py` と同じ役回りだが、GFRQ は1レコ�
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import s3keys
 import wire_gridfreq
+
+# 1バッチ最大30秒ぶんなので、MAX_RECENT_MINUTES(30分)の窓でも高々60件程度。
+# GETごとにS3往復が乗る(→逐次だと`/recent`の応答がバッチ数に比例して遅くなって
+# いた)ので、IO律速なスレッドプールで並行に取りに行く。CPU側の処理
+# (wire_gridfreq.parse)は軽いのでGILの制約は問題にならない。
+_GET_CONCURRENCY = 16
 
 
 def list_series_keys_in_range(s3, bucket: str, start_us: int, end_us: int) -> list[str]:
@@ -44,12 +52,17 @@ def load_batches_in_range(s3, bucket: str, start_us: int, end_us: int) -> list[w
     1系列のためにAPI全体を500にする理由が無い。
     """
     keys = list_series_keys_in_range(s3, bucket, start_us - 40_000_000, end_us)
-    batches = []
-    for key in keys:
+
+    def _fetch(key: str) -> wire_gridfreq.Batch | None:
         try:
             body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-            batches.append(wire_gridfreq.parse(body))
+            return wire_gridfreq.parse(body)
         except Exception:  # noqa: BLE001
-            continue
+            return None
+
+    if not keys:
+        return []
+    with ThreadPoolExecutor(max_workers=min(_GET_CONCURRENCY, len(keys))) as pool:
+        batches = [b for b in pool.map(_fetch, keys) if b is not None]
     batches.sort(key=lambda b: b.header.batch_start_us)
     return batches
