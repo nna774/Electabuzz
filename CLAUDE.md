@@ -161,6 +161,11 @@ rollup 用の terraform は対応する Lambda がまだ無いので書いてい
 - **NamazuHaUrokoGaNai の `terraform/` には apply するな。** Electabuzz は独立 state に閉じる
 - **切り出しと一般化を同時にやるな。** 一般化は**テストと実機が揃っている側**で先に済ませ、
   出来上がったものをバイト等価に移す（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
+- **デプロイ(`terraform apply`・dashboardの`aws s3 sync`+CloudFront invalidation)は
+  commit→PR作成→ユーザーがマージ→デプロイの順で止めろ。PRのマージも指示なく行うな。**
+  実機1台が本番データを送り続け、ダッシュボードも公開済みで、デプロイは実コストと
+  稼働中システムに直接効く。2026-08-27、「デプロイして」の指示でPRマージからデプロイ
+  まで一括で進めてしまい、「PRのマージも指示なくやらないで」と訂正された
 
 ## 4. 作業したらログを1本足す
 
