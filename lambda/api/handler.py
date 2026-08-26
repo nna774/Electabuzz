@@ -29,6 +29,7 @@ import os
 import time
 
 import boto3
+import botocore.config
 
 from batch_uplink import devices
 
@@ -42,7 +43,14 @@ _S3 = None
 def _s3():
     global _S3
     if _S3 is None:
-        _S3 = boto3.client("s3")
+        # store_gridfreq.load_batches_in_range が_GET_CONCURRENCYスレッドで並行に
+        # get_objectを叩くので、既定のmax_pool_connections(10)のままだと
+        # プールが足りず「Connection pool is full, discarding connection」で
+        # TCP/TLSを都度張り直すことになり、並行化の効果が接続の張り直しコストで
+        # 相殺される。並行度と同じ数まで広げる。
+        _S3 = boto3.client(
+            "s3", config=botocore.config.Config(
+                max_pool_connections=store_gridfreq._GET_CONCURRENCY))
     return _S3
 
 
