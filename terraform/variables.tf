@@ -109,8 +109,8 @@ variable "watchdog_schedule" {
 
 variable "freq_deviation_threshold_hz" {
   type        = number
-  default     = 0.1
-  description = "|f - f_nominal|がこの値[Hz]を超えた状態がfreq_deviation_hold_records件連続したら周波数逸脱として確定する。docs/cloud.mdの目安(100mHz)をそのまま既定にした未校正値。"
+  default     = 0.15
+  description = "|f - f_nominal|がこの値[Hz]を超えた状態がfreq_deviation_hold_records件連続したら周波数逸脱として確定する。旧既定100mHzは実データ(直近8日・22,933バッチ)で102件発火し出すぎていたため、`tools/backtest_detect_thresholds.py`のバックテスト(150mHzなら2件・約98%減)を根拠に150mHzへ校正した(→ docs/log/2026-08-28-detect-freq-threshold-backtest.md)。"
 }
 
 variable "freq_deviation_hold_records" {
