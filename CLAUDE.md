@@ -10,7 +10,11 @@
 Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っている）。
 **detect(周波数逸脱・RoCoF・電圧異常の確定判定、フェーズ9)は`apply`・実クラウド
 起動確認まで完了した**（2026-08-17、実機バッチでdetect Lambdaがエラー無く完走
-することを確認済み。残るのは実際の逸脱事例での動作確認としきい値校正
+することを確認済み。**周波数逸脱の閾値は実データ8日分のバックテストで
+100mHz→150mHzへ校正し`apply`済み**（2026-08-28、102件→2件・約98%減を確認
+→ [docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md](docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md)）。
+RoCoF・電圧異常の閾値は引き続き未校正で、実際の逸脱事例での動作確認も今後の
+実データ待ち
 → [docs/log/2026-08-17-detect-gridfreq-apply-verify.md](docs/log/2026-08-17-detect-gridfreq-apply-verify.md)）。
 
 このファイルは**ハブであって仕様ではない**。実体は各ドキュメントにある。
@@ -50,7 +54,11 @@ Slack通知——AC入力線を実際に抜く等の異常系確認だけ残っ�
 （2026-08-16 → [docs/log/2026-08-16-watchdog-implementation.md](docs/log/2026-08-16-watchdog-implementation.md)）。
 **detect(周波数逸脱・RoCoF・電圧異常の確定判定、フェーズ9)は`apply`・実クラウド
 起動確認まで完了した**（2026-08-17、実機バッチでdetect Lambdaがエラー無く完走
-することを確認済み。残るのは実際の逸脱事例での動作確認としきい値校正
+することを確認済み。**周波数逸脱の閾値は実データ8日分のバックテストで
+100mHz→150mHzへ校正し`apply`済み**（2026-08-28、102件→2件・約98%減を確認
+→ [docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md](docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md)）。
+RoCoF・電圧異常の閾値は引き続き未校正で、実際の逸脱事例での動作確認も今後の
+実データ待ち
 → [docs/log/2026-08-17-detect-gridfreq-apply-verify.md](docs/log/2026-08-17-detect-gridfreq-apply-verify.md)）。
 rollupは引き続き未着手。
 
@@ -126,13 +134,16 @@ terraform(events.tf・detect Lambda・S3トリガー)一式。テスト21件追�
 `terraform validate`・4本(ingest/api/watchdog/detect)のビルドとも緑。
 `terraform apply`は4 add/4 change/0 destroyで完了、実機device 1のバッチで
 detect Lambdaがエラー無く完走することをCloudWatch Logsで確認済み。しきい値は
-`docs/cloud.md`の目安をそのまま既定にした未校正値
+`docs/cloud.md`の目安をそのまま既定にした未校正値だったが、**周波数逸脱閾値は
+2026-08-28に実データバックテストで100mHz→150mHzへ校正し`apply`済み**
+（→ [docs/log/2026-08-28-detect-freq-threshold-backtest.md](docs/log/2026-08-28-detect-freq-threshold-backtest.md)、
+[docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md](docs/log/2026-08-28-detect-freq-threshold-150mhz-deploy.md)）
 → [docs/log/2026-08-17-detect-gridfreq-v1.md](docs/log/2026-08-17-detect-gridfreq-v1.md)、
 [docs/log/2026-08-17-detect-gridfreq-apply-verify.md](docs/log/2026-08-17-detect-gridfreq-apply-verify.md)）。
 
-**次の一手**: detectのしきい値校正——安定運転中は実際の逸脱事例が無いので、
-Slack通知・`/events`記録が正しく動くかは今後の実データ待ち。あるいは時刻偏差(TE)の
-絶対値表示・欠測区間の可視化(PPSデータが安定して出ている今、着手可能)。
+**次の一手**: RoCoF・電圧異常の閾値校正(周波数逸脱は済み)——安定運転中は実際の
+逸脱事例が無いので、Slack通知・`/events`記録が正しく動くかは今後の実データ待ち。
+あるいは時刻偏差(TE)の絶対値表示・欠測区間の可視化(PPSデータが安定して出ている今、着手可能)。
 **OTA(pull型)は実装・実機実クラウド確認とも完了済み**（2026-08-15、
 `v_rms_mv`配線を含む最新ビルドで配信全経路(`publish_ota.sh`→
 `request_ota.py`→DynamoDB→取得→書き込み→再起動→台帳自動解放)を実機で確認
