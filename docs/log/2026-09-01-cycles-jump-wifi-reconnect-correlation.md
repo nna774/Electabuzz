@@ -1,0 +1,156 @@
+# 2026-09-01 累積位相(cycles)の突発ジャンプとWiFi再接続の相関を確認した
+
+## 何があったか
+
+ユーザーからダッシュボードの共有URL(`#live?m=5&auto=0&s=1788250390`、2026-09-01
+17:12頃)について「バグってないか」と指摘を受けた。実際に開くと周波数グラフに
+350Hz・100Hzの棘が3本立ち、Y軸が公称値±300Hz級まで自動拡大されて肝心の50Hz帯が
+直線に潰れていた。TEグラフも同時刻に階段状の跳躍(+6秒級)が出ていた。
+
+## 何が起きているか(表示バグではなく実データの異常)
+
+`/recent`を直接叩いて生データを見ると、`lambda/api/handler.py`の周波数計算
+(`f = Δcycles / nominal_dt`)自体は設計通りに動いていた。**入力の`cycles`
+(GFRQレコードの累積位相)が、1レコード分(1秒)の区間内で突然+300(≈6秒ぶん)、
+次に+300、最後に+50(≈1秒ぶん)だけ余計に進んでいた**——`DISCONTINUITY`フラグは
+立っておらず、`api/handler.py`はこれを「正常な連続区間」として扱い、結果として
+瞬時周波数が350Hz・350Hz・100Hzという物理的にありえない値になった。TEの階段状
+跳躍(+6.003秒等)も、同じ`cycles`の跳躍がアンカーからの差分に直接乗った結果で、
+ジャンプ幅は`Δcycles / f_nominal_hz`で完全に一致する(300/50=6.00、50/50=1.00)。
+
+**すでにdetectの誤検知として実害が出ている。** `/events`を確認したところ、この
+一件はRoCoF(急変)イベント`0001-rocof-59608345`(peak 300.14)としてすでにSlackへ
+通知・記録済みだった。履歴を遡ると同種の「peak値がほぼ300か50ちょうど」の偽
+RoCoFイベントが直近半日で計4件見つかった(09:04, 09:07, 15:45, 17:12 JST)。
+detectのしきい値校正(`CLAUDE.md`「次の一手」)に着手する前に、この根本原因を
+先に潰さないと校正そのものが意味を持たない。
+
+## WiFi断との相関(ユーザーの指摘どおりだった)
+
+4件全てについて、S3 `series/`オブジェクトの`LastModified`(受信壁時計)と
+ファイル名の`batch_start_us`(測定時刻)を突き合わせた。通常のバッチ間隔は
+測定開始から**約30.5秒後**にアップロードされる一定パターンだが、異常が
+起きたバッチの**直前のバッチ**は例外なく大きく遅延していた:
+
+| 異常イベント(JST) | 直前バッチの遅延 | 備考 |
+|---|---|---|
+| 09:04:28 | 68.5秒(通常比+38秒) | 次のバッチも同時刻にバースト着弾 |
+| 09:07:13 | 40.5秒(通常比+10秒) | 同上、両者とも遅延バッチ直後 |
+| 15:45:50 | 96.4秒(通常比+66秒) | 2バッチが同時刻にバースト着弾 |
+| 17:12:38 | 81秒(通常比+50秒) | 2バッチが同時刻にバースト着弾 |
+
+**4件とも「アップロード間隔が異常に開いた直後、複数バッチがまとめて着弾する」
+バーストパターンと一致した。** これは`batch-uplink`のspill/retry機構(オフライン中
+はLittleFSへ退避し、再接続後にまとめて送る)が動いた形そのもので、WiFi切断→
+再接続が起きたときの挙動と符合する。ユーザーの「WiFi断のタイミングと一致してる
+気がする」という勘は正しかった。
+
+## firmware側の機序を特定した
+
+`firmware/src/main.cpp`を読み、**`gWindowQueue`(容量8、`xQueueCreate(8,
+sizeof(WindowRecord))`)がオーバーフローした時の「古い方を黙って捨てる」経路
+(`pumpI2s()`、line 281-287)が`DISCONTINUITY`を立てていない**ことを確認した。
+これが根本原因そのものである。
+
+**構造:**
+
+- `cycles`(累積位相)を進める`GoertzelEstimator::addSample()`はCore1
+  (`i2sTask`)が5ms周期で回す`pumpI2s()`から呼ばれ、**Core0の状態と無関係に
+  1秒ごとに1個`WindowRecord`を`gWindowQueue`へ積み続ける**(→設計原則通り、
+  位相推定はネットワークと独立)
+- しかし`WindowRecord`を実際にバッチへ取り込む(`gridfreq::addRecord()`)のは
+  **Core0の`loop()`**で、`while (xQueueReceive(gWindowQueue, &rec, 0))`
+  (line 807)がノンブロッキングで drain するだけ——**`loop()`自体が長時間
+  ブロックすると、その間キューは誰にも読まれない**
+- `loop()`をブロックしうる箇所は複数ある: `ensureWifi()`のWiFi再接続待ち
+  (`kWifiConnectTimeoutMs`=20秒、失敗時`kWifiRetryDelayMs`=5秒のバックオフ
+  を挟んで再試行、しかも**この間`loop()`は早期`return`し`gWindowQueue`の
+  drainブロックへ到達すらしない**、line 702-707)、`gSntp.query()`
+  (`kNtpTimeoutMs`=2秒)、`gUploader->pump()`のHTTPS POST(不安定な回線では
+  TCP/TLSのタイムアウトで数秒〜)
+- キューが満杯(8件)の状態でCore1が新しい窓を1個積もうとすると、
+  `pumpI2s()`は**最も古い未送信の`WindowRecord`を`xQueueReceive`で
+  黙って引き抜いて捨て、新しい方を積む**(line 281-287の
+  コメント「古い方を消す」)。この discard パスは、I2S DMAオーバーフロー時
+  (line 220-231、`gPendingDiscontinuity`を立てる)と**別経路で、
+  discontinuityを一切立てない**
+- `cyclesQ16`はGoertzel内部では物理量として正しく単調増加し続けているので、
+  **捨てられた窓の分だけ、次にキューから生き残って取り出される`WindowRecord`の
+  `cyclesQ16`が「1個前の記録」から見て余計に進んで見える**。これがそのまま
+  `gridfreq::addRecord()`でバッチへ書き込まれ、`flags`にDISCONTINUITYが
+  立たないまま送信される
+
+**観測値との整合性:** 異常が起きたバッチ内で3回のジャンプ(+300, +300, +50)が
+ちょうど8レコード間隔(273→281→289)で起きていた。8はまさに`gWindowQueue`の
+容量であり、「キューが満杯になるたび、直近8件だけが生き残り古い方から
+捨てられる」という discard の性質と一致する。+300/+50という「50Hz×整数秒」の
+きれいな値も、1窓=1秒あたり+50サイクル(公称)が積み上がる設計
+(`Goertzel.cpp`の`cyclesAccum_ += fNominalHz_ * windowSec_ + dphi/(2π)`)
+からすれば、**捨てられた窓の個数がそのまま整数倍の50として現れる**のは
+当然の帰結だった(6窓捨てられれば+300、1窓なら+50)。
+
+WiFi再接続が直接cyclesを壊すのではなく、**WiFi再接続(またはNTP/アップロードの
+ブロッキング)がCore0の`loop()`を数秒〜十数秒止め、その間Core1が生成し続けた
+`WindowRecord`のうち古いものがフラグ無しで静かに失われる**、というのが正確な
+描写である。
+
+## 採用する修正方針: タスク分割(Namazuの既存解決策を踏襲)
+
+ユーザーから「Namazuの方はキューから引き出すジョブを別に作る方式で解決した気が
+する」と指摘を受け、`../NamazuHaUrokoGaNai`の過去ログを確認したところ、
+**構造的に全く同じ問題を2026-08-11に解決済みだった**と判明した。
+
+Namazu側の経緯([log/2026-08-11-uploader-task-split-design.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-task-split-design.md)、
+[log/2026-08-11-uploader-task-split-realhw-check.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-task-split-realhw-check.md)):
+`gBatchQueue`(深さ4、drop-oldest)が`uploaderTask`のWiFi再接続待ちブロック中に
+溢れる問題を2026-08-07にdevice1で70分間実際に踏んでいた。解決策は
+`uploaderTask`を**吸い出しタスク**(`batchDrainTask`。`gBatchQueue`→
+`Uploader::enqueue()`だけを担い、`xQueueReceive(..., portMAX_DELAY)`でブロック
+待ちする)と**送信タスク**(WiFi再接続・`pump()`・OTA判定、従来のロジックのまま)
+に分割する形で実装され(PR #79)、実機のWiFi遮断試験で「`batchDrainTask`自体は
+健全に動いていた」ことを確認済み([log/2026-08-11-uploader-starvation-under-sustained-send-failure.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-starvation-under-sustained-send-failure.md))。
+
+**キュー満杯自体を起こさない**この方式は、下で採らなかった「discardをdiscontinuity
+として正直に申告するだけ」の案より上位互換——データを失わずに済む。
+
+**Electabuzzへ当てはめる前提も揃っていた**: この設計は`Uploader`側に「別タスク
+から`enqueue()`/`pump()`を同時に安全に呼べるmutex」を要求するが(Namazu側で
+`batch-uplink` PR #22として実装)、**Electabuzzが現在ピンしているv3.1.0には
+既にこのmutexとRAM満杯時の`flushToSpill()`安全弁が入っている**
+(`firmware/platformio.ini`で確認。`CLAUDE.md`の「現在のpinはv2.12.0」という
+記載は古い)。つまり**batch-uplinkのバージョンアップ無しで、firmware
+(`main.cpp`)側の変更だけ**で同じ形を組める。
+
+**Electabuzz版の設計**: `loop()`内の`while (xQueueReceive(gWindowQueue, ...))`
+ブロック(line 806-916、AC入力監視・LED更新・バッチ組み立て・
+`gUploader->enqueue()`まで込み)をそっくり新規タスク(Core0ピン、
+`portMAX_DELAY`でブロック受信)へ切り出す。`loop()`側は`ensureWifi()`・
+SNTP・PPS回帰・GNSS UART読み取り・`gUploader->pump()`・OTA判定だけを
+引き続き担当する。Namazuが踏んだ「downstream(Batchプール)の枯渇」に相当する
+二次的な飢餓は、Electabuzzの`gWindowQueue`が固定長要素(`WindowRecord`)の
+FreeRTOSキューで実体のプール枯渇が起きない構造のぶん、無さそうに見える
+(実装・実機検証で要確認)。
+
+**却下(ではなく保留)した案**: `pumpI2s()`のdiscardパスに discontinuity
+フラグだけ足す案は、実装がより小さい代わりに**データが失われること自体は
+直らない**(欠測として正直に申告されるだけ)。タスク分割の方が優れているため
+今回はこちらを採らないが、タスク分割が何らかの理由で見送りになった場合の
+フォールバックとして選択肢に残す。
+
+## 次に可能になったこと
+
+- **修正方針を確定した**: `main.cpp`にNamazu方式(吸い出し/送信の2タスク分割)
+  を移植する。`batch-uplink`側の前提(mutex・flushToSpill安全弁)は既にv3.1.0
+  ピンで揃っているため、firmware側の実装だけで着手できる
+- 実装後は`pio run -e record`のビルド確認、可能なら実機でのWiFi遮断試験
+  (Namazuと同様、意図的に切って`gWindowQueue`が溢れないことを確認)が要る
+- detectのRoCoFしきい値校正は、この修正のあとに着手すべき
+
+## まだ分かっていないこと
+
+- `loop()`を実際に何秒ブロックした具体的な呼び出し(WiFi再接続のリトライ
+  ループそのものか、`gSntp.query()`か、`gUploader->pump()`のHTTPS POSTか)
+  までは未特定——どれもキュー溢れを起こしうる長さなので、実機ログ
+  (`ensureWifi()`等の`Serial.printf`)を見ないと切り分けられない。ただし
+  **どの経路であってもキュー満杯discardという単一の穴を通る**ので、
+  修正自体はこの特定を待たずに着手できる
