@@ -55,6 +55,11 @@ static constexpr size_t kNtpServerCount = sizeof(kNtpServers) / sizeof(kNtpServe
 static constexpr uint32_t kWifiConnectTimeoutMs = 20000;
 static constexpr uint32_t kWifiRetryDelayMs = 5000;
 
+// loop()末尾の小休止。measurementTaskへNTPクエリ待ちの役目を譲った(→ main.cppの
+// measurementTaskコメント)ぶん、loop()自体はensureWifi()・pump()が即座に返る間
+// 詰め物なしでbusy-loopしうる。Core0を独占しない程度の値。
+static constexpr uint32_t kLoopIdleDelayMs = 20;
+
 // --- NAMZ_GRIDFREQ_TEST（フェーズ1疎通確認。tools/capture_serial.py 用）---
 //
 // 48kHz の生サンプルはそのままではシリアル(115200baud)の帯域を超える。

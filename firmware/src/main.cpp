@@ -576,6 +576,236 @@ void checkAndPerformOta(const String& target) {
   }
 }
 
+// --- 計測タスク（Core0）---
+//
+// NTP/PPS回帰(gFs/gPps)・gWindowQueueの吸い出し・バッチ組み立て・Uploaderへの
+// enqueue()まで、**時間基準と累積位相に触る仕事を全部このタスクだけが行う**。
+// loop()（WiFi再接続・gUploader->pump()のHTTPS POST・OTA取得で数秒〜数十秒
+// ブロックしうる）から意図的に追い出した。
+//
+// **背景**: 2026-09-01、gWindowQueue(容量8)がloop()のブロック中に満杯になり、
+// 古いWindowRecordがDISCONTINUITY無しで黙って捨てられ、ダッシュボードに
+// 350Hz/100Hzの偽スパイクが出る不具合を発見した
+// (→ docs/log/2026-09-01-cycles-jump-wifi-reconnect-correlation.md)。
+// Namazu(../NamazuHaUrokoGaNai)が2026-08-11に構造的に同じ問題
+// (gBatchQueueがuploaderTaskのWiFi待ちで溢れる)を「吸い出し/送信の2タスク
+// 分割」で解決済みだったので、それを踏襲する。
+//
+// **Namazuとの違い**: Namazu側のbatchDrainTaskは`gBatchQueue`→
+// `Uploader::enqueue()`だけを転送する薄いタスクで済んだ——バッチの組み立て
+// 自体は元々sampling task単独の仕事だったため。Electabuzzは逆に、バッチ起点
+// (`gFs.unixUsAt()`)・ヘッダ(`fs_measured_uhz`等、`gFs`/`gPps`から取る)を
+// **loop()自身が**組み立てていたので、「窓の吸い出しだけ」を別タスクにする
+// 素朴な移植だと、今度はgFs/gPps(内部にロック無しの回帰係数を持つ
+// `NtpTimebase`/`PpsTimebase`)を2タスクから触ることになり、新しいデータ競合を
+// 生んでしまう。**なのでElectabuzzでは「時間基準に触る仕事」をまるごと
+// このタスクへ寄せ、loop()側は一切gFs/gPpsに触らない**という形にした
+// ——書き手は常にこのタスク1つだけ、という不変条件で守る。
+//
+// gUploader::enqueue()をloop()側のpump()と別タスクから安全に呼べるのは、
+// Uploader内部のmutex(Namazu起源の変更、batch-uplink v3.1.0で既に導入済み。
+// →docs/batch-uplink.md)のおかげで、Electabuzz側での追加対応は不要だった。
+//
+// gWindowQueueの受信にタイムアウト(1秒)を設けているのは、窓は通常1秒に1回
+// しか来ない前提でNTPクエリ間隔・PPSエッジの取り込みも同じ周期で回すため
+// ——portMAX_DELAYで無期限に待つと、窓が来ない間それらの処理が止まってしまう。
+void measurementTask(void*) {
+  for (;;) {
+    if (static_cast<int32_t>(millis() - gNextQueryMs) >= 0) {
+      const char* server = kNtpServers[gServerIndex];
+      gServerIndex = (gServerIndex + 1) % kNtpServerCount;
+
+      timebase::SntpSample s{};
+      const bool got = gSntp.query(server, kNtpTimeoutMs, s);
+      const I2sSnapshot i2s = takeI2sSnapshot();
+      const uint64_t frames = got ? framesAt(i2s, s.ticks) : i2s.frames;
+
+      static uint32_t seenOverflows = 0;
+      if (i2s.overflows != seenOverflows) {
+        Serial.printf("# i2s overflow (total=%u); fs regression reset\n", i2s.overflows);
+        gFs.reset();
+        // ドロップしたフレーム分だけgEdgeDetectorのサンプル計数とgFramesの対応が
+        // ズレるため、PPS回帰も測れなかった区間として切り捨てる(gFsと同じ理由)。
+        gPps.reset();
+        seenOverflows = i2s.overflows;
+      }
+
+      if (got && i2s.atUs != 0) {
+        const uint64_t rttFrames = (s.rttTicks * kFsNominalHz) / 1000000ULL;
+        gFs.addObservation(frames, s.unixUs, rttFrames);
+      }
+      Serial.printf("# fs n=%u source=%s ppm=%.4f resid_ns=%u l_pp=%u r_pp=%u\n", gFs.obsCount(),
+                    gFs.source() == timebase::Source::kNtp ? "NTP" : "NOMINAL",
+                    ppmOf(gFs, kFsNominalMicroHz), gFs.residualNs(), i2s.lPp, i2s.rPp);
+
+      // NOMINAL→NTPへ切り替わった瞬間、規正済みfsでGoertzelを作り直す。
+      // **fsはコンストラクタで固定される設計なので、作り直す以外に追従する方法がない**
+      // (→ Goertzel.h)。cyclesQ16は継続させる(絶対累積位相を後退させない不変条件)。
+      // 旧オブジェクトは意図的にdeleteしない: Core1(i2sTask)がaddSample()実行中に
+      // このポインタを参照している可能性があり、delete するとuse-after-freeになる。
+      // この切り替えは通常運用でセッションに1回しか起きないので、
+      // 数百バイトのリークは実害が無い。
+      const bool nowNtp = gFs.source() == timebase::Source::kNtp;
+      digitalWrite(kLedTimebaseLockPin, nowNtp ? HIGH : LOW);
+      if (nowNtp && !gFsSourceWasNtp) {
+        gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+        const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+        gRecordGoertzel.store(
+            new gridfreq::GoertzelEstimator(gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6,
+                                             1.0, seedCycles),
+            std::memory_order_relaxed);
+        Serial.printf("# fs locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
+                      "resid_ns=%u\n",
+                      static_cast<double>(gFs.fsMicroHz()) / 1e6,
+                      static_cast<unsigned long long>(seedCycles), gFs.obsCount(),
+                      gFs.residualNs());
+      }
+      gFsSourceWasNtp = nowNtp;
+
+      gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
+    }
+
+    // PPSエッジをgPpsの回帰へ取り込む。NTPクエリ(128秒間隔)とは独立に毎周回す
+    // ——PPSエッジは1秒に1回来るので、NTPのタイミングに縛られると再武装が遅れる。
+    {
+      double edgeTicks;
+      while (gPpsEdgeQueue != nullptr && xQueueReceive(gPpsEdgeQueue, &edgeTicks, 0) == pdTRUE) {
+        gPps.addEdge(edgeTicks);
+      }
+
+      const bool nowPps = gPps.source() == timebase::Source::kPps;
+      digitalWrite(kLedPpsLockPin, nowPps ? HIGH : LOW);
+      if (nowPps && !gPpsSourceWasPps) {
+        // NTPロック時と同じ手順(2段目)。PPSはNTPよりさらに精度が良いので、
+        // NTPで一度武装した後でもPPSロック時にもう一段作り直す価値がある。
+        gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+        const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+        gRecordGoertzel.store(
+            new gridfreq::GoertzelEstimator(gFNominalHz,
+                                             static_cast<double>(gPps.fsMicroHz()) / 1e6, 1.0,
+                                             seedCycles),
+            std::memory_order_relaxed);
+        Serial.printf("# pps locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
+                      "resid_ns=%u\n",
+                      static_cast<double>(gPps.fsMicroHz()) / 1e6,
+                      static_cast<unsigned long long>(seedCycles), gPps.obsCount(),
+                      gPps.residualNs());
+      }
+      gPpsSourceWasPps = nowPps;
+    }
+
+    WindowRecord rec;
+    if (gWindowQueue != nullptr &&
+        xQueueReceive(gWindowQueue, &rec, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      // WS2812の色更新は測定データの経路と無関係な副作用。rec.cyclesQ16は
+      // このWindowRecordが確定した時点の累積位相そのもの(→ wire-format.md)なので、
+      // 追加の状態を持たずそのまま渡せる。**測定・送信のロジックには一切影響しない。**
+      {
+        const ledstatus::Rgb c =
+            ledstatus::cyclesToColor(rec.cyclesQ16, kWs2812Brightness, kCyclesToHueGain);
+        neopixelWrite(kWs2812Pin, c.r, c.g, c.b);
+
+        // 回転方向(色の変化だけ)では「今速いか遅いか」が瞬時に読めないという
+        // フィードバックを受け、符号だけを別LEDで即座に示す。
+        gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
+        if (g != nullptr) {
+          digitalWrite(kLedFastSlowPin, g->freqHz() > gFNominalHz ? HIGH : LOW);
+        }
+      }
+
+      // AC入力断の監視。**測定・送信の経路(cyclesQ16/addRecord)には一切影響しない**
+      // ——rec.vRmsMvを読むだけの副作用で、上のWS2812/fast-slow LED更新と同じ位置に置く。
+      if (gAcInputMonitor.update(rec.vRmsMv)) {
+        const bool faulted = gAcInputMonitor.faulted();
+        Serial.printf("# ac input %s (v_rms_mv=%u)\n", faulted ? "fault" : "restored",
+                      rec.vRmsMv);
+        for (fault::FaultNotifier* n : gFaultNotifiers) n->notify(faulted);
+      }
+      // このバッチの区間で一度でもfaultedだったかをラッチする。gBatchDiscontinuityと
+      // 同じパターン——バッチ確定時にkGfrqFlagPowerFailへ変換してリセットする(下記)。
+      if (gAcInputMonitor.faulted()) gBatchPowerFail = true;
+
+      if (gCurrentBatch == nullptr) {
+        gCurrentBatch = gridfreq::newBatch();
+        // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
+        // 起点もここから取れば同じ時刻源で揃う。**timesync(粗いSMOOTH SNTP壁時計)を
+        // 都度読み直すと、そちらの補正ジッタがバッチ境界にだけ乗ってしまう**
+        // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
+        //
+        // **「今」ではなく rec.framesAtEnd を使う。** このタスクがブロックされていた
+        // 分(gSntp.query()のkNtpTimeoutMs等)がそのままバッチ起点のズレになって
+        // 再発しないよう、Core1が窓の完成した瞬間に確定させた値を使う。
+        //
+        // gFs が未規正(NOMINAL)の間は、timesync::nowUs() を都度読み直す代わりに
+        // gNominalAnchorUnixUs(SNTP初回同期の直後に一度だけ固定)から公称fsで外挿する。
+        // **NOMINAL中はSNTPのslew補正ジッタ(数ms級)がバッチ境界のたびに乗り、
+        // freq=Δcycles/Δtの計算がそれを増幅して〜100mHz級の針になっていた**
+        // (実機検証で発覚。NTP問い合わせループとは無関係にNOMINAL区間だけで再現した)。
+        // 絶対時刻としての確度はNOMINALなので元々主張しない——効くのは
+        // 「同一アンカーからの一貫した外挿でバッチ境界の相対時間が正確になる」ことだけ。
+        //
+        // **アンカーは遅延取得する。** setup()で無条件に読むと、SNTPの初回同期が
+        // まだの場合(実機でWiFi不調により発生した)、timesync::nowUs()が1970年
+        // 付近を返し、その悪い値がセッション全体に固定されてしまう。
+        // timesync::isSynced()がtrueになった最初のバッチでだけ取り直すことで、
+        // 悪い影響を「同期が済むまでの数バッチ」に限定する(旧来のtimesync都度読みと
+        // 同程度の影響で、以後は良いアンカーに揃う)。
+        if (gNominalAnchorUnixUs == 0 && timesync::isSynced()) {
+          gNominalAnchorUnixUs = timesync::nowUs();
+          gNominalAnchorFrames = rec.framesAtEnd;
+        }
+        const uint64_t batchStartUs =
+            gFs.source() == timebase::Source::kNtp
+                ? gFs.unixUsAt(rec.framesAtEnd)
+            : gNominalAnchorUnixUs != 0
+                ? gNominalAnchorUnixUs +
+                      static_cast<uint64_t>(static_cast<double>(rec.framesAtEnd -
+                                                                  gNominalAnchorFrames) /
+                                                 static_cast<double>(kFsNominalHz) * 1e6 +
+                                             0.5)
+                : timesync::nowUs();
+        gCurrentBatch->begin(batchStartUs);
+      }
+      gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, rec.vRmsMv, /*flags=*/0);
+      if (rec.discontinuity) gBatchDiscontinuity = true;
+
+      if (gCurrentBatch->isFull()) {
+        gridfreq::HeaderFields hf;
+        hf.device_id = gIdentity.deviceId;
+        hf.session_id = gSessionId;
+        hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
+
+        // **正直にそのバッチ時点の源を申告する。** PPSが使えるならfs関連の3値は
+        // PPS優先(NTPより桁で精度が良い)、絶対時刻(batchStartUs)への固定は
+        // 引き続きgFs(NtpTimebase)が担う役割分担のまま変えていない
+        // (→ docs/log/2026-08-12-pps-timebase-impl.md)。1バッチはこの粒度でしか
+        // 源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で代表させる
+        // (→ docs/log/2026-08-08-nominal-window-open-question.md と同じ考え方)。
+        const bool ntpUsable = gFs.source() == timebase::Source::kNtp;
+        const bool ppsUsable = gPps.source() == timebase::Source::kPps;
+        hf.fs_measured_uhz = ppsUsable ? gPps.fsMicroHz() : gFs.fsMicroHz();
+        hf.tb_obs_count = ppsUsable ? gPps.obsCount() : gFs.obsCount();
+        hf.tb_residual_ns = ppsUsable ? gPps.residualNs() : gFs.residualNs();
+        hf.timebase_source = ppsUsable ? (ntpUsable ? kGfrqTbPpsNtp : kGfrqTbPps)
+                                        : (ntpUsable ? kGfrqTbNtp : kGfrqTbNominal);
+        hf.flags = (gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0) |
+                   (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0) |
+                   (gBatchPowerFail ? kGfrqFlagPowerFail : 0);
+        hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
+        gridfreq::fillHeader(*gCurrentBatch, hf);
+
+        Serial.printf("# batch enqueue: records=%u flags=0x%04x ram=%u spill=%u\n",
+                      gCurrentBatch->recordCount(), hf.flags, gUploader->ramQueued(),
+                      gUploader->spillCount());
+        gUploader->enqueue(gCurrentBatch);
+        gCurrentBatch = nullptr;
+        gBatchDiscontinuity = false;
+        gBatchPowerFail = false;
+      }
+    }
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -696,8 +926,25 @@ void setup() {
   Serial.println("# recording started immediately (timebase_source=NOMINAL); "
                   "will re-arm goertzel once fs locks via NTP (~600s)");
   gNextQueryMs = millis();
+
+  // measurementTask(→上のコメント参照)はloop()より優先度を上げておく——
+  // WiFi再接続待ち・pump()のHTTPS POST・OTA取得でloop()が長時間ブロックしても、
+  // gWindowQueueの吸い出しとNTP/PPS回帰は止めたくないため(Namazuの
+  // batchDrainTask(優先度2) > uploaderTask(優先度1)と同じ考え方)。
+  // Arduinoのloop()自体は既定で優先度1のタスク(loopTask)として動く。
+  if (xTaskCreatePinnedToCore(measurementTask, "measurement", 8192, nullptr, 2, nullptr, 0) !=
+      pdPASS) {
+    for (;;) {
+      Serial.println("# BUG: measurementTask creation failed (heap exhausted?). halting.");
+      delay(5000);
+    }
+  }
 }
 
+// **NTP/PPS回帰・gWindowQueueの吸い出し・バッチ組み立ては触らない**
+// (→measurementTaskのコメント)。ここはWiFi再接続・GNSS UART読み取り・
+// Uploaderの送信(pump())・OTA取得だけを担当する——ブロックしうる呼び出しを
+// 全部集めた側、という役割の切り分け。
 void loop() {
   ensureWifi();
   if (WiFi.status() != WL_CONNECTED) {
@@ -706,89 +953,6 @@ void loop() {
     return;
   }
   digitalWrite(kLedWifiPin, LOW);  // 接続中は消灯(問題なし)
-
-  if (static_cast<int32_t>(millis() - gNextQueryMs) >= 0) {
-    const char* server = kNtpServers[gServerIndex];
-    gServerIndex = (gServerIndex + 1) % kNtpServerCount;
-
-    timebase::SntpSample s{};
-    const bool got = gSntp.query(server, kNtpTimeoutMs, s);
-    const I2sSnapshot i2s = takeI2sSnapshot();
-    const uint64_t frames = got ? framesAt(i2s, s.ticks) : i2s.frames;
-
-    static uint32_t seenOverflows = 0;
-    if (i2s.overflows != seenOverflows) {
-      Serial.printf("# i2s overflow (total=%u); fs regression reset\n", i2s.overflows);
-      gFs.reset();
-      // ドロップしたフレーム分だけgEdgeDetectorのサンプル計数とgFramesの対応が
-      // ズレるため、PPS回帰も測れなかった区間として切り捨てる(gFsと同じ理由)。
-      gPps.reset();
-      seenOverflows = i2s.overflows;
-    }
-
-    if (got && i2s.atUs != 0) {
-      const uint64_t rttFrames = (s.rttTicks * kFsNominalHz) / 1000000ULL;
-      gFs.addObservation(frames, s.unixUs, rttFrames);
-    }
-    Serial.printf("# fs n=%u source=%s ppm=%.4f resid_ns=%u l_pp=%u r_pp=%u\n", gFs.obsCount(),
-                  gFs.source() == timebase::Source::kNtp ? "NTP" : "NOMINAL",
-                  ppmOf(gFs, kFsNominalMicroHz), gFs.residualNs(), i2s.lPp, i2s.rPp);
-
-    // NOMINAL→NTPへ切り替わった瞬間、規正済みfsでGoertzelを作り直す。
-    // **fsはコンストラクタで固定される設計なので、作り直す以外に追従する方法がない**
-    // (→ Goertzel.h)。cyclesQ16は継続させる(絶対累積位相を後退させない不変条件)。
-    // 旧オブジェクトは意図的にdeleteしない: Core1(i2sTask)がaddSample()実行中に
-    // このポインタを参照している可能性があり、delete するとuse-after-freeになる。
-    // この切り替えは通常運用でセッションに1回しか起きないので、
-    // 数百バイトのリークは実害が無い。
-    const bool nowNtp = gFs.source() == timebase::Source::kNtp;
-    digitalWrite(kLedTimebaseLockPin, nowNtp ? HIGH : LOW);
-    if (nowNtp && !gFsSourceWasNtp) {
-      gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
-      const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
-      gRecordGoertzel.store(
-          new gridfreq::GoertzelEstimator(gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6,
-                                           1.0, seedCycles),
-          std::memory_order_relaxed);
-      Serial.printf("# fs locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
-                    "resid_ns=%u\n",
-                    static_cast<double>(gFs.fsMicroHz()) / 1e6,
-                    static_cast<unsigned long long>(seedCycles), gFs.obsCount(),
-                    gFs.residualNs());
-    }
-    gFsSourceWasNtp = nowNtp;
-
-    gNextQueryMs = millis() + (kNtpIntervalSeconds + random(kNtpJitterSeconds)) * 1000;
-  }
-
-  // PPSエッジをgPpsの回帰へ取り込む。NTPクエリ(128秒間隔)とは独立に毎周回す
-  // ——PPSエッジは1秒に1回来るので、NTPのタイミングに縛られると再武装が遅れる。
-  {
-    double edgeTicks;
-    while (gPpsEdgeQueue != nullptr && xQueueReceive(gPpsEdgeQueue, &edgeTicks, 0) == pdTRUE) {
-      gPps.addEdge(edgeTicks);
-    }
-
-    const bool nowPps = gPps.source() == timebase::Source::kPps;
-    digitalWrite(kLedPpsLockPin, nowPps ? HIGH : LOW);
-    if (nowPps && !gPpsSourceWasPps) {
-      // NTPロック時と同じ手順(2段目)。PPSはNTPよりさらに精度が良いので、
-      // NTPで一度武装した後でもPPSロック時にもう一段作り直す価値がある。
-      gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
-      const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
-      gRecordGoertzel.store(
-          new gridfreq::GoertzelEstimator(gFNominalHz,
-                                           static_cast<double>(gPps.fsMicroHz()) / 1e6, 1.0,
-                                           seedCycles),
-          std::memory_order_relaxed);
-      Serial.printf("# pps locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
-                    "resid_ns=%u\n",
-                    static_cast<double>(gPps.fsMicroHz()) / 1e6,
-                    static_cast<unsigned long long>(seedCycles), gPps.obsCount(),
-                    gPps.residualNs());
-    }
-    gPpsSourceWasPps = nowPps;
-  }
 
   // GNSS UART。NMEAは1Hz程度でしか届かないので、I2Sのように詰まって溢れる
   // 規模のデータ量ではない——available()が空になるまで読み切ってよい。
@@ -800,118 +964,6 @@ void loop() {
         gGnssFix = fix.hasFix();
       }
       // GGA以外の行(GSA/RMC等)はparseGgaがfalseを返すだけで無害に無視される。
-    }
-  }
-
-  WindowRecord rec;
-  while (gWindowQueue != nullptr && xQueueReceive(gWindowQueue, &rec, 0) == pdTRUE) {
-    // WS2812の色更新は測定データの経路と無関係な副作用。rec.cyclesQ16は
-    // このWindowRecordが確定した時点の累積位相そのもの(→ wire-format.md)なので、
-    // 追加の状態を持たずそのまま渡せる。**測定・送信のロジックには一切影響しない。**
-    {
-      const ledstatus::Rgb c =
-          ledstatus::cyclesToColor(rec.cyclesQ16, kWs2812Brightness, kCyclesToHueGain);
-      neopixelWrite(kWs2812Pin, c.r, c.g, c.b);
-
-      // 回転方向(色の変化だけ)では「今速いか遅いか」が瞬時に読めないという
-      // フィードバックを受け、符号だけを別LEDで即座に示す。
-      gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
-      if (g != nullptr) {
-        digitalWrite(kLedFastSlowPin, g->freqHz() > gFNominalHz ? HIGH : LOW);
-      }
-    }
-
-    // AC入力断の監視。**測定・送信の経路(cyclesQ16/addRecord)には一切影響しない**
-    // ——rec.vRmsMvを読むだけの副作用で、上のWS2812/fast-slow LED更新と同じ位置に置く。
-    if (gAcInputMonitor.update(rec.vRmsMv)) {
-      const bool faulted = gAcInputMonitor.faulted();
-      Serial.printf("# ac input %s (v_rms_mv=%u)\n", faulted ? "fault" : "restored",
-                    rec.vRmsMv);
-      for (fault::FaultNotifier* n : gFaultNotifiers) n->notify(faulted);
-    }
-    // このバッチの区間で一度でもfaultedだったかをラッチする。gBatchDiscontinuityと
-    // 同じパターン——バッチ確定時にkGfrqFlagPowerFailへ変換してリセットする(下記)。
-    if (gAcInputMonitor.faulted()) gBatchPowerFail = true;
-
-    if (gCurrentBatch == nullptr) {
-      gCurrentBatch = gridfreq::newBatch();
-      // バッチ内のレコード間隔は gFs(NtpTimebase の回帰)の fsMicroHz() から決まる。
-      // 起点もここから取れば同じ時刻源で揃う。**timesync(粗いSMOOTH SNTP壁時計)を
-      // 都度読み直すと、そちらの補正ジッタがバッチ境界にだけ乗ってしまう**
-      // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md）。
-      //
-      // **「今」ではなく rec.framesAtEnd を使う。** xQueueReceive した時刻(=このループを
-      // 回している瞬間)を使うと、gSntp.query()（最大 kNtpTimeoutMs ブロックしうる）で
-      // loop() が詰まった分がそのままバッチ起点のズレになって再発する
-      // （実機検証で発覚。NTP問い合わせのたびに境界dtが乱れていた）。
-      // rec.framesAtEnd は Core1 が窓の完成した瞬間に確定させた値なので、
-      // Core0 側の処理遅延に一切左右されない。
-      //
-      // gFs が未規正(NOMINAL)の間は、timesync::nowUs() を都度読み直す代わりに
-      // gNominalAnchorUnixUs(SNTP初回同期の直後に一度だけ固定)から公称fsで外挿する。
-      // **NOMINAL中はSNTPのslew補正ジッタ(数ms級)がバッチ境界のたびに乗り、
-      // freq=Δcycles/Δtの計算がそれを増幅して〜100mHz級の針になっていた**
-      // (実機検証で発覚。NTP問い合わせループとは無関係にNOMINAL区間だけで再現した)。
-      // 絶対時刻としての確度はNOMINALなので元々主張しない——効くのは
-      // 「同一アンカーからの一貫した外挿でバッチ境界の相対時間が正確になる」ことだけ。
-      //
-      // **アンカーは遅延取得する。** setup()で無条件に読むと、SNTPの初回同期が
-      // まだの場合(実機でWiFi不調により発生した)、timesync::nowUs()が1970年
-      // 付近を返し、その悪い値がセッション全体に固定されてしまう。
-      // timesync::isSynced()がtrueになった最初のバッチでだけ取り直すことで、
-      // 悪い影響を「同期が済むまでの数バッチ」に限定する(旧来のtimesync都度読みと
-      // 同程度の影響で、以後は良いアンカーに揃う)。
-      if (gNominalAnchorUnixUs == 0 && timesync::isSynced()) {
-        gNominalAnchorUnixUs = timesync::nowUs();
-        gNominalAnchorFrames = rec.framesAtEnd;
-      }
-      const uint64_t batchStartUs =
-          gFs.source() == timebase::Source::kNtp
-              ? gFs.unixUsAt(rec.framesAtEnd)
-          : gNominalAnchorUnixUs != 0
-              ? gNominalAnchorUnixUs +
-                    static_cast<uint64_t>(static_cast<double>(rec.framesAtEnd -
-                                                                gNominalAnchorFrames) /
-                                               static_cast<double>(kFsNominalHz) * 1e6 +
-                                           0.5)
-              : timesync::nowUs();
-      gCurrentBatch->begin(batchStartUs);
-    }
-    gridfreq::addRecord(*gCurrentBatch, rec.cyclesQ16, rec.vRmsMv, /*flags=*/0);
-    if (rec.discontinuity) gBatchDiscontinuity = true;
-
-    if (gCurrentBatch->isFull()) {
-      gridfreq::HeaderFields hf;
-      hf.device_id = gIdentity.deviceId;
-      hf.session_id = gSessionId;
-      hf.f_nominal_mhz = static_cast<uint32_t>(gFNominalHz * 1000.0 + 0.5);
-
-      // **正直にそのバッチ時点の源を申告する。** PPSが使えるならfs関連の3値は
-      // PPS優先(NTPより桁で精度が良い)、絶対時刻(batchStartUs)への固定は
-      // 引き続きgFs(NtpTimebase)が担う役割分担のまま変えていない
-      // (→ docs/log/2026-08-12-pps-timebase-impl.md)。1バッチはこの粒度でしか
-      // 源を持たないので、ロックがバッチの途中で起きた回は末尾側の源で代表させる
-      // (→ docs/log/2026-08-08-nominal-window-open-question.md と同じ考え方)。
-      const bool ntpUsable = gFs.source() == timebase::Source::kNtp;
-      const bool ppsUsable = gPps.source() == timebase::Source::kPps;
-      hf.fs_measured_uhz = ppsUsable ? gPps.fsMicroHz() : gFs.fsMicroHz();
-      hf.tb_obs_count = ppsUsable ? gPps.obsCount() : gFs.obsCount();
-      hf.tb_residual_ns = ppsUsable ? gPps.residualNs() : gFs.residualNs();
-      hf.timebase_source = ppsUsable ? (ntpUsable ? kGfrqTbPpsNtp : kGfrqTbPps)
-                                      : (ntpUsable ? kGfrqTbNtp : kGfrqTbNominal);
-      hf.flags = (gBatchDiscontinuity ? kGfrqFlagDiscontinuity : 0) |
-                 (ppsUsable ? kGfrqFlagPpsLocked : 0) | (gGnssFix ? kGfrqFlagGnssFix : 0) |
-                 (gBatchPowerFail ? kGfrqFlagPowerFail : 0);
-      hf.soc_temp_c = static_cast<int8_t>(temperatureRead());
-      gridfreq::fillHeader(*gCurrentBatch, hf);
-
-      Serial.printf("# batch enqueue: records=%u flags=0x%04x ram=%u spill=%u\n",
-                    gCurrentBatch->recordCount(), hf.flags, gUploader->ramQueued(),
-                    gUploader->spillCount());
-      gUploader->enqueue(gCurrentBatch);
-      gCurrentBatch = nullptr;
-      gBatchDiscontinuity = false;
-      gBatchPowerFail = false;
     }
   }
 
@@ -928,6 +980,11 @@ void loop() {
   // pull型OTA更新の確認（→ docs/ota.md）。同じバッチ送信レスポンスヘッダで
   // 気づく。不一致なら取得〜書き込みまで一息に行い、完了までここでブロックする。
   checkAndPerformOta(gUploader->lastResponseHeaderValue(kOtaVersionHeader));
+
+  // measurementTaskへNTPクエリ待ちの役目を譲った分、ensureWifi()・pump()が
+  // 即座に返る間はここが詰め物なしでbusy-loopしうる。Core0を独占しない程度の
+  // 小休止を入れる(→ config.hのkLoopIdleDelayMsコメント)。
+  delay(kLoopIdleDelayMs);
 }
 
 #elif defined(NAMZ_LED_TEST)
