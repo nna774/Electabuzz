@@ -45,26 +45,72 @@ detectのしきい値校正(`CLAUDE.md`「次の一手」)に着手する前に�
 再接続が起きたときの挙動と符合する。ユーザーの「WiFi断のタイミングと一致してる
 気がする」という勘は正しかった。
 
-## まだ分かっていないこと
+## firmware側の機序を特定した
 
-- **なぜWiFi再接続が`cycles`(累積位相)そのものを壊すのか、機序は未特定。**
-  設計上、位相推定(`firmware/lib/Goertzel/`)はサンプル列だけで完結し、ネットワーク
-  とは独立のはずだった(→ [timebase.md](../timebase.md))。WiFi再接続処理が
-  I2S/Goertzelのタイミング(ISR・Core分担)を一時的に阻害し、実際にサンプルが
-  欠落または重複しているのに`resetWindow()`(`DISCONTINUITY`を立てる経路)が
-  呼ばれていない可能性が高いが、firmwareコードの追跡はまだ行っていない
-- ジャンプ幅が毎回「50Hz×整数秒(6秒/1秒)」ときれいな値になる理由も未確認
-  ——WiFi再接続処理の典型的なブロッキング時間(例: DHCP再取得やスキャンの
-  タイムアウト)と一致するかは要検証
-- `bad/`隔離やCRC不一致は起きていない(=ワイヤフォーマット自体は正常に届いている)
-  ので、壊れているのは firmware がレコードへ書き込む時点の`cycles`の値そのもの
+`firmware/src/main.cpp`を読み、**`gWindowQueue`(容量8、`xQueueCreate(8,
+sizeof(WindowRecord))`)がオーバーフローした時の「古い方を黙って捨てる」経路
+(`pumpI2s()`、line 281-287)が`DISCONTINUITY`を立てていない**ことを確認した。
+これが根本原因そのものである。
+
+**構造:**
+
+- `cycles`(累積位相)を進める`GoertzelEstimator::addSample()`はCore1
+  (`i2sTask`)が5ms周期で回す`pumpI2s()`から呼ばれ、**Core0の状態と無関係に
+  1秒ごとに1個`WindowRecord`を`gWindowQueue`へ積み続ける**(→設計原則通り、
+  位相推定はネットワークと独立)
+- しかし`WindowRecord`を実際にバッチへ取り込む(`gridfreq::addRecord()`)のは
+  **Core0の`loop()`**で、`while (xQueueReceive(gWindowQueue, &rec, 0))`
+  (line 807)がノンブロッキングで drain するだけ——**`loop()`自体が長時間
+  ブロックすると、その間キューは誰にも読まれない**
+- `loop()`をブロックしうる箇所は複数ある: `ensureWifi()`のWiFi再接続待ち
+  (`kWifiConnectTimeoutMs`=20秒、失敗時`kWifiRetryDelayMs`=5秒のバックオフ
+  を挟んで再試行、しかも**この間`loop()`は早期`return`し`gWindowQueue`の
+  drainブロックへ到達すらしない**、line 702-707)、`gSntp.query()`
+  (`kNtpTimeoutMs`=2秒)、`gUploader->pump()`のHTTPS POST(不安定な回線では
+  TCP/TLSのタイムアウトで数秒〜)
+- キューが満杯(8件)の状態でCore1が新しい窓を1個積もうとすると、
+  `pumpI2s()`は**最も古い未送信の`WindowRecord`を`xQueueReceive`で
+  黙って引き抜いて捨て、新しい方を積む**(line 281-287の
+  コメント「古い方を消す」)。この discard パスは、I2S DMAオーバーフロー時
+  (line 220-231、`gPendingDiscontinuity`を立てる)と**別経路で、
+  discontinuityを一切立てない**
+- `cyclesQ16`はGoertzel内部では物理量として正しく単調増加し続けているので、
+  **捨てられた窓の分だけ、次にキューから生き残って取り出される`WindowRecord`の
+  `cyclesQ16`が「1個前の記録」から見て余計に進んで見える**。これがそのまま
+  `gridfreq::addRecord()`でバッチへ書き込まれ、`flags`にDISCONTINUITYが
+  立たないまま送信される
+
+**観測値との整合性:** 異常が起きたバッチ内で3回のジャンプ(+300, +300, +50)が
+ちょうど8レコード間隔(273→281→289)で起きていた。8はまさに`gWindowQueue`の
+容量であり、「キューが満杯になるたび、直近8件だけが生き残り古い方から
+捨てられる」という discard の性質と一致する。+300/+50という「50Hz×整数秒」の
+きれいな値も、1窓=1秒あたり+50サイクル(公称)が積み上がる設計
+(`Goertzel.cpp`の`cyclesAccum_ += fNominalHz_ * windowSec_ + dphi/(2π)`)
+からすれば、**捨てられた窓の個数がそのまま整数倍の50として現れる**のは
+当然の帰結だった(6窓捨てられれば+300、1窓なら+50)。
+
+WiFi再接続が直接cyclesを壊すのではなく、**WiFi再接続(またはNTP/アップロードの
+ブロッキング)がCore0の`loop()`を数秒〜十数秒止め、その間Core1が生成し続けた
+`WindowRecord`のうち古いものがフラグ無しで静かに失われる**、というのが正確な
+描写である。
 
 ## 次に可能になったこと
 
-- firmware側(WiFi再接続イベントハンドラと`GoertzelEstimator`/`I2S`タイミングの
-  相互作用)の切り分け調査
-- 応急策として、WiFi再接続イベントを検知した際に`DISCONTINUITY`フラグを立てる
-  (原因を潰せなくても、少なくとも下流の「測れなかった区間を測れたように見せない」
-  原則には従える)
-- detectのRoCoFしきい値校正は、この根本原因への対処(またはフラグ経由の除外)
-  より後に回すべき
+- **修正方針が明確になった**: `pumpI2s()`のキュー満杯discardパス
+  (line 281-287)でも、I2Sオーバーフロー時と同じように discontinuity を
+  立てる(`gPendingDiscontinuity = true`)。あるいは`GoertzelEstimator::
+  resetWindow()`相当の処理を挟み、捨てた窓をまたいだ位相接続を切る
+- 修正すれば、この種のジャンプは今後 DISCONTINUITY 付きの正直な欠測として
+  記録され、freq_hz・te_secondsともNoneになり、detectの偽RoCoFも発生しなくなる
+  (`lambda/api/handler.py`側は既にDISCONTINUITY尊重の設計になっているので、
+  firmware側だけ直せば足りる)
+- detectのRoCoFしきい値校正は、この修正のあとに着手すべき
+
+## まだ分かっていないこと
+
+- `loop()`を実際に何秒ブロックした具体的な呼び出し(WiFi再接続のリトライ
+  ループそのものか、`gSntp.query()`か、`gUploader->pump()`のHTTPS POSTか)
+  までは未特定——どれもキュー溢れを起こしうる長さなので、実機ログ
+  (`ensureWifi()`等の`Serial.printf`)を見ないと切り分けられない。ただし
+  **どの経路であってもキュー満杯discardという単一の穴を通る**ので、
+  修正自体はこの特定を待たずに着手できる
