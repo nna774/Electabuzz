@@ -137,14 +137,54 @@ FreeRTOSキューで実体のプール枯渇が起きない構造のぶん、無
 今回はこちらを採らないが、タスク分割が何らかの理由で見送りになった場合の
 フォールバックとして選択肢に残す。
 
+## 実装した(実機投入はまだ)
+
+`firmware/src/main.cpp`に新規タスク`measurementTask`(Core0、優先度2)を追加した。
+
+**設計は当初予想から1点変わった。** 直前の見立てでは「`gWindowQueue`の吸い出し
+ブロックだけを新規タスクへ切り出せば足りる」としていたが、実装に落とす過程で
+見落としに気づいた——**バッチの起点計算(`gFs.unixUsAt()`)とヘッダ確定
+(`fs_measured_uhz`等)も同じブロックの中で`gFs`/`gPps`を読んでおり、これらは
+`loop()`側のNTP/PPS回帰(`gFs.addObservation()`・`gPps.addEdge()`)が今も書き込む
+対象だった。** 吸い出しだけを別タスクにする素朴な移植だと、`NtpTimebase`/
+`PpsTimebase`(ロック無しの回帰係数を生フィールドで持つ)を2タスクから
+同時に触る新しいデータ競合を生んでしまう。
+
+Namazu側でこの問題が起きなかったのは、バッチの組み立てとヘッダ確定が
+元々sampling task単独の仕事で、`batchDrainTask`は完成品の`Batch*`を
+`Uploader::enqueue()`へ転送するだけの薄い役割だったため。Electabuzzは
+バッチ組み立てが`loop()`の中に同居していたので、単純な1:1移植ではなく
+**「時間基準(`gFs`/`gPps`)に触る仕事を全部まとめてmeasurementTaskへ移す」**
+形にした——NTPクエリ(`gSntp.query()`、`kNtpTimeoutMs`=2秒の有界ブロック)・
+PPSエッジ取り込み・Goertzelの再武装判定・`gWindowQueue`の吸い出し・
+バッチ組み立て・ヘッダ確定・`gUploader->enqueue()`まで、書き手をこのタスク
+1つに絞ることで新しい競合を生まずに済んだ。`loop()`側は`ensureWifi()`・
+GNSS UART読み取り・`gUploader->pump()`・OTA判定だけが残り、`gFs`/`gPps`には
+一切触れない。`gUploader->enqueue()`と`pump()`を別タスクから安全に呼べるのは
+`batch-uplink` v3.1.0の内蔵mutexのおかげ(→前節)。
+
+`gWindowQueue`の受信は`portMAX_DELAY`ではなく1秒タイムアウトにした——窓が
+来ない間もNTPクエリのタイミング判定・PPSエッジ取り込みを止めないため
+(Namazuの`batchDrainTask`は他に担当が無いので無期限ブロックで良かったが、
+measurementTaskはNTP/PPSも兼務するため事情が違う)。
+
+`loop()`はNTPクエリ待ち(有界2秒)による自然なペース調整を失ったため、
+`kLoopIdleDelayMs`(20ms、`config.h`)を末尾に足してbusy-loopを防いだ。
+
+**確認したこと**: `pio run -e record`(該当ブロックを含む唯一のenv)ビルド緑、
+`pio run -e s3 -e gridfreqtest`も緑(`provision`は元々このworktreeに
+`secrets.h`が無く失敗するだけで今回の変更とは無関係)。firmware側の既存
+ホストテスト(GridFreq/Timebase/Goertzelの`test/run.sh`)は今回変更していない
+ライブラリ層なので当然全て緑のまま。
+
+**確認できていないこと**: 実機投入・実機でのWiFi遮断試験(Namazuと同様、
+意図的に切って`gWindowQueue`が溢れないことを確認する)はまだ。
+
 ## 次に可能になったこと
 
-- **修正方針を確定した**: `main.cpp`にNamazu方式(吸い出し/送信の2タスク分割)
-  を移植する。`batch-uplink`側の前提(mutex・flushToSpill安全弁)は既にv3.1.0
-  ピンで揃っているため、firmware側の実装だけで着手できる
-- 実装後は`pio run -e record`のビルド確認、可能なら実機でのWiFi遮断試験
-  (Namazuと同様、意図的に切って`gWindowQueue`が溢れないことを確認)が要る
-- detectのRoCoFしきい値校正は、この修正のあとに着手すべき
+- 実機投入し、WiFi遮断試験(Namazu方式と同様)で実際に`gWindowQueue`が
+  溢れなくなった(=350Hz/100Hzスパイクが再発しない)ことを確認する
+- detectのRoCoFしきい値校正は、この修正の実機確認が済んだあとに着手すべき
 
 ## まだ分かっていないこと
 
