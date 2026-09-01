@@ -94,16 +94,56 @@ WiFi再接続が直接cyclesを壊すのではなく、**WiFi再接続(または
 `WindowRecord`のうち古いものがフラグ無しで静かに失われる**、というのが正確な
 描写である。
 
+## 採用する修正方針: タスク分割(Namazuの既存解決策を踏襲)
+
+ユーザーから「Namazuの方はキューから引き出すジョブを別に作る方式で解決した気が
+する」と指摘を受け、`../NamazuHaUrokoGaNai`の過去ログを確認したところ、
+**構造的に全く同じ問題を2026-08-11に解決済みだった**と判明した。
+
+Namazu側の経緯([log/2026-08-11-uploader-task-split-design.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-task-split-design.md)、
+[log/2026-08-11-uploader-task-split-realhw-check.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-task-split-realhw-check.md)):
+`gBatchQueue`(深さ4、drop-oldest)が`uploaderTask`のWiFi再接続待ちブロック中に
+溢れる問題を2026-08-07にdevice1で70分間実際に踏んでいた。解決策は
+`uploaderTask`を**吸い出しタスク**(`batchDrainTask`。`gBatchQueue`→
+`Uploader::enqueue()`だけを担い、`xQueueReceive(..., portMAX_DELAY)`でブロック
+待ちする)と**送信タスク**(WiFi再接続・`pump()`・OTA判定、従来のロジックのまま)
+に分割する形で実装され(PR #79)、実機のWiFi遮断試験で「`batchDrainTask`自体は
+健全に動いていた」ことを確認済み([log/2026-08-11-uploader-starvation-under-sustained-send-failure.md](https://github.com/nna774/NamazuHaUrokoGaNai/blob/master/docs/log/2026-08-11-uploader-starvation-under-sustained-send-failure.md))。
+
+**キュー満杯自体を起こさない**この方式は、下で採らなかった「discardをdiscontinuity
+として正直に申告するだけ」の案より上位互換——データを失わずに済む。
+
+**Electabuzzへ当てはめる前提も揃っていた**: この設計は`Uploader`側に「別タスク
+から`enqueue()`/`pump()`を同時に安全に呼べるmutex」を要求するが(Namazu側で
+`batch-uplink` PR #22として実装)、**Electabuzzが現在ピンしているv3.1.0には
+既にこのmutexとRAM満杯時の`flushToSpill()`安全弁が入っている**
+(`firmware/platformio.ini`で確認。`CLAUDE.md`の「現在のpinはv2.12.0」という
+記載は古い)。つまり**batch-uplinkのバージョンアップ無しで、firmware
+(`main.cpp`)側の変更だけ**で同じ形を組める。
+
+**Electabuzz版の設計**: `loop()`内の`while (xQueueReceive(gWindowQueue, ...))`
+ブロック(line 806-916、AC入力監視・LED更新・バッチ組み立て・
+`gUploader->enqueue()`まで込み)をそっくり新規タスク(Core0ピン、
+`portMAX_DELAY`でブロック受信)へ切り出す。`loop()`側は`ensureWifi()`・
+SNTP・PPS回帰・GNSS UART読み取り・`gUploader->pump()`・OTA判定だけを
+引き続き担当する。Namazuが踏んだ「downstream(Batchプール)の枯渇」に相当する
+二次的な飢餓は、Electabuzzの`gWindowQueue`が固定長要素(`WindowRecord`)の
+FreeRTOSキューで実体のプール枯渇が起きない構造のぶん、無さそうに見える
+(実装・実機検証で要確認)。
+
+**却下(ではなく保留)した案**: `pumpI2s()`のdiscardパスに discontinuity
+フラグだけ足す案は、実装がより小さい代わりに**データが失われること自体は
+直らない**(欠測として正直に申告されるだけ)。タスク分割の方が優れているため
+今回はこちらを採らないが、タスク分割が何らかの理由で見送りになった場合の
+フォールバックとして選択肢に残す。
+
 ## 次に可能になったこと
 
-- **修正方針が明確になった**: `pumpI2s()`のキュー満杯discardパス
-  (line 281-287)でも、I2Sオーバーフロー時と同じように discontinuity を
-  立てる(`gPendingDiscontinuity = true`)。あるいは`GoertzelEstimator::
-  resetWindow()`相当の処理を挟み、捨てた窓をまたいだ位相接続を切る
-- 修正すれば、この種のジャンプは今後 DISCONTINUITY 付きの正直な欠測として
-  記録され、freq_hz・te_secondsともNoneになり、detectの偽RoCoFも発生しなくなる
-  (`lambda/api/handler.py`側は既にDISCONTINUITY尊重の設計になっているので、
-  firmware側だけ直せば足りる)
+- **修正方針を確定した**: `main.cpp`にNamazu方式(吸い出し/送信の2タスク分割)
+  を移植する。`batch-uplink`側の前提(mutex・flushToSpill安全弁)は既にv3.1.0
+  ピンで揃っているため、firmware側の実装だけで着手できる
+- 実装後は`pio run -e record`のビルド確認、可能なら実機でのWiFi遮断試験
+  (Namazuと同様、意図的に切って`gWindowQueue`が溢れないことを確認)が要る
 - detectのRoCoFしきい値校正は、この修正のあとに着手すべき
 
 ## まだ分かっていないこと

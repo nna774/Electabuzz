@@ -77,11 +77,9 @@ rollupは引き続き未着手。
 - **クラウド**: `lambda/ingest/`（受信）+ `lambda/api/`（`/recent`・`/devices`）+
   `lambda/watchdog/`（2026-08-16新規。欠測監視、→下記）。detectが無いので`/events`は無い。
   送信基盤は
-  [batch-uplink](https://github.com/nna774/batch-uplink) **v2.12.0**
-  （2026-08-11、TLSハンドシェイクタイムアウト短縮・CA証明書ピン留め・spillの
-  破損隔離(`discardSpillOn400`)を取り込むため追従。`v2.0.0`のヘッダ配列
-  nullptr終端化に伴い呼び出し側`main.cpp`も書き換え済み。実機投入はまだ
-  → [docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md](docs/log/2026-08-11-batch-uplink-v2.12.0-bump.md)）
+  [batch-uplink](https://github.com/nna774/batch-uplink) **v3.1.0**
+  （`track_prev_key`(detectのS3コスト対策、→ [docs/log/2026-08-23-detect-prev-batch-key-implementation.md](docs/log/2026-08-23-detect-prev-batch-key-implementation.md))
+  まで追従済み。詳細・pin規約は → [docs/batch-uplink.md](docs/batch-uplink.md)）
 - **`terraform/`**: ingest + api + dashboard + watchdog 分は全て**`apply`済み**
   （watchdog分は2026-08-16apply。手動invokeで実機device 1の生存台帳を実際に
   読めることを確認済み）。state はNamazuと同じ保存先バケットの別keyで独立。
@@ -227,7 +225,7 @@ rollup 用の terraform は対応する Lambda がまだ無いので書いてい
   家庭用地震計。**実機稼働中。壊すな。**
   送信基盤の大半をここから流用する。`docs/*.md` の相対リンクはこのレポを指している
 - **[batch-uplink](https://github.com/nna774/batch-uplink)** — 両者が共有する送信基盤。
-  **現在の pin は v2.12.0。タグで pin しろ**（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
+  **現在の pin は v3.1.0。タグで pin しろ**（→ [docs/batch-uplink.md](docs/batch-uplink.md)）
 
 ## 7. 書きぶりの約束
 
