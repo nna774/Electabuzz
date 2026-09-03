@@ -45,6 +45,9 @@ soak/
 # worktree（別セッションが作る作業用クローン。レポには入れない）
 .claude/worktrees/
 
+# direnv（ローカルのAWS_PROFILE切り替え等、マシン依存の設定）
+.envrc
+
 # 解析時のS3生バッチキャッシュ（→ tools/README.md）。再取得を避けるための
 # 再利用資産だが、リポジトリには入れない
 .s3cache/
