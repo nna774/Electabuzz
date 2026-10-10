@@ -30,6 +30,13 @@ class PpsTimebase final : public TimebaseEstimator {
   static constexpr uint32_t kMinObs = 10;
   static constexpr uint32_t kMinSpanSeconds = 30;
 
+  // 採用に必要な確度の上限[ns/s](=ppb)。回帰が立った時点でこれを超えていたら
+  // 回帰を捨て、そのエッジを原点に取り直す。R chへの外乱で出た偽エッジ(間隔が
+  // ±kGapToleranceFraction内に収まったもの)は回帰を恒久的に偏らせ、後から正常な
+  // エッジを積んでも偏りが残るため(→ docs/log/2026-10-11-goertzel-stale-fs-after-pps-relock.md)。
+  // ±0.5サンプルのジッタでも30秒で100ns/s台に収まるので、1ppmは正常時に十分緩い。
+  static constexpr uint32_t kMaxResidualNs = 1000;
+
   // 1回のaddEdge()呼び出しで許容する最大ギャップ[秒]。これを超えたらreset()する
   // ——長時間の unlocked/holdover を跨いで回帰をつなげると、その区間で
   // 「1エッジ=1秒」という前提そのものが崩れているかもしれないため。
@@ -66,16 +73,23 @@ class PpsTimebase final : public TimebaseEstimator {
 
   // --- 以下はログ・診断用。ワイヤ形式には載らない ---
 
-  // 採用に足る観測が溜まったか。
+  // 採用に足る観測が溜まり、かつ確度がkMaxResidualNs以内か。
   bool usable() const;
   // 捨てた標本の数。増え続けるならエッジ検出かPPS自体の質を疑え。
   uint32_t rejectedCount() const { return rejected_; }
+  // 確度不足(kMaxResidualNs超過)で回帰を取り直した回数。
+  uint32_t restartCount() const { return restarts_; }
   // 最初のエッジからの経過 [s]（= 累積エッジ数。ロールフォワードで動かない）。
   double spanSeconds() const { return totalEdges_; }
   // 回帰残差の RMS [ns]。NtpTimebase::fitRmsNs() と同じ役回り。
   uint32_t fitRmsNs() const;
 
  private:
+  // 回帰が立つだけの観測が溜まったか(確度は問わない)。外れ値排除と原点の
+  // ロールフォワードはこちらで判定する。
+  bool fitted() const;
+  double slopeSigmaNs() const;
+
   bool acceptEdge(double ticks, double expectedEdges);
   double predictY(double x) const;
   double residualSumSquares() const;
@@ -95,6 +109,7 @@ class PpsTimebase final : public TimebaseEstimator {
 
   uint32_t n_ = 0;
   uint32_t rejected_ = 0;
+  uint32_t restarts_ = 0;
 
   // Welford 型の共分散累積。NtpTimebase と同じ理由（長時間走らせても
   // 有効数字が潰れない）。x は経過エッジ数、y は「ティックの公称からのずれ」。
