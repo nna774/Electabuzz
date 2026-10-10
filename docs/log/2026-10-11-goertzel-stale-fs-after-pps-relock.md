@@ -80,7 +80,27 @@ device 1へ配信し、OTAの再起動を兼ねて動作を確認した。01:41:
 - 1.001 sは、NTP未ロックの間`batch_start_us`を公称fsで外挿しているためのずれ(約35ppm)で、
   `record_cadence`の閾値(1000ppm)より十分小さい
 
+## マージとapply(同日)
+
+PR #96をsquashマージ(`61b2c44`)し、`main`から`build_lambda.sh`→`terraform apply`した。
+0 add/4 change/0 destroy。環境変数の差分は`ELBZ_CADENCE_ERROR_PPM=1000`の追加だけで、
+他の3本(api/ingest/watchdog)は同梱している`common/`の変更とzipの作り直しによる
+ハッシュ差分である(8/27以降に`lambda/`へ入ったコードは#96だけ)。4本とも
+`LastUpdateStatus=Successful`、apply直後も`/devices`・`/events`は応答し、ingestも
+途切れていない。
+
+- 実機のfirmwareは`a64d869`(PRブランチのコミット)のままである。`main`の`61b2c44`と
+  firmwareの内容は同じで、squashでハッシュが変わっただけ
+- 周波数逸脱のイベントは再起動(01:41:33)で途切れ、以後出ていない。`record_cadence`も
+  出ていない(健全時の想定どおり)
+- 再起動直後の01:41:58〜01:46:18に電圧異常(ピーク+24%)が出た。v_rmsが一時
+  11.7〜12.8Vまで上がっていた。その後は約11.1V(基準点10300mVの+8%)で、今回の故障
+  とは別に、電圧の基準点・閾値の校正が要る
+- detectのCloudWatch Logs・メトリクスは`electabuzz-admin`ロールに読み取り権限が
+  無く、apply後のdetectの実行結果は直接確認できていない
+
 ## 未完了
 
-- PRのマージ、detect/terraformの`apply`、dashboardのデプロイはまだ
+- dashboardのデプロイ(`record_cadence`のラベル表示)。`aws s3 cp`がClaude Code側の
+  権限で止められたので、手で実行する必要がある
 - 09-27 02:38・09:08頃のv_rms 25Vへの跳ねとPPS途絶の物理的な原因は不明
