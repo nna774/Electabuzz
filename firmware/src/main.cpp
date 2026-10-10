@@ -113,7 +113,7 @@ struct WindowRecord {
   // その遅延がそのままバッチ起点のタイムスタンプに乗ってしまう
   // （→ docs/log/2026-08-08-batch-boundary-timestamp-jump.md の再発版）。
   uint64_t framesAtEnd;
-  bool discontinuity;  // DMA 溢れの直後に確定した窓か（gI2sMux で保護）
+  bool discontinuity;  // DMA 溢れ・Goertzel作り直しの直後に確定した窓か
   uint16_t vRmsMv;      // トランス二次側の実効値[mV]（→ computeVRmsMv()）
 };
 QueueHandle_t gWindowQueue = nullptr;
@@ -268,6 +268,11 @@ void pumpI2s() {
 
       gridfreq::GoertzelEstimator* g = gRecordGoertzel.load(std::memory_order_relaxed);
       if (g != nullptr && g->addSample(l)) {
+        // 作り直した推定器の最初の窓は基準点にしか使われず、その1窓ぶんの位相が
+        // cyclesQ16に積まれない。推定器が替わって最初のレコードを不連続として申告する。
+        static gridfreq::GoertzelEstimator* lastEmitter = nullptr;
+        const bool rearmed = lastEmitter != nullptr && lastEmitter != g;
+        lastEmitter = g;
         WindowRecord rec{};
         rec.cyclesQ16 = g->cyclesQ16();
         rec.vRmsMv = computeVRmsMv(g->magnitude(), g->windowSamples());
@@ -275,7 +280,7 @@ void pumpI2s() {
         // xQueueReceive するまでの遅延（NTP問い合わせ等）に一切依存しない。
         rec.framesAtEnd = framesBeforeThisRead + i + 1;
         portENTER_CRITICAL(&gI2sMux);
-        rec.discontinuity = gPendingDiscontinuity;
+        rec.discontinuity = gPendingDiscontinuity || rearmed;
         gPendingDiscontinuity = false;
         portEXIT_CRITICAL(&gI2sMux);
         if (gWindowQueue != nullptr && xQueueSend(gWindowQueue, &rec, 0) != pdTRUE) {
@@ -609,6 +614,24 @@ void checkAndPerformOta(const String& target) {
 // gWindowQueueの受信にタイムアウト(1秒)を設けているのは、窓は通常1秒に1回
 // しか来ない前提でNTPクエリ間隔・PPSエッジの取り込みも同じ周期で回すため
 // ——portMAX_DELAYで無期限に待つと、窓が来ない間それらの処理が止まってしまう。
+// 記録用Goertzelを指定のfsで作り直す。**fsはコンストラクタで固定される設計なので、
+// 作り直す以外に追従する方法がない**(→ Goertzel.h)。cyclesQ16は継続させる
+// (絶対累積位相を後退させない不変条件)。作り直しで1窓ぶんの位相が欠けることは
+// pumpI2s()が次のレコードのdiscontinuityとして申告する。
+// 旧オブジェクトは意図的にdeleteしない: Core1(i2sTask)がaddSample()実行中に
+// このポインタを参照している可能性があり、delete するとuse-after-freeになる。
+// 作り直しはロック時と規正値のずれが閾値を超えた時だけなので、リークは実害が無い。
+void rearmRecordGoertzel(double fsHz, const char* reason, uint32_t obs, uint32_t residNs) {
+  gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
+  const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
+  const double prevFs = prev != nullptr ? prev->fsHz() : 0.0;
+  gRecordGoertzel.store(new gridfreq::GoertzelEstimator(gFNominalHz, fsHz, 1.0, seedCycles),
+                        std::memory_order_relaxed);
+  Serial.printf("# %s: goertzel re-armed fs=%.6f (was %.6f) seed_cycles_q16=%llu obs=%u "
+                "resid_ns=%u\n",
+                reason, fsHz, prevFs, static_cast<unsigned long long>(seedCycles), obs, residNs);
+}
+
 void measurementTask(void*) {
   for (;;) {
     if (static_cast<int32_t>(millis() - gNextQueryMs) >= 0) {
@@ -639,26 +662,11 @@ void measurementTask(void*) {
                     ppmOf(gFs, kFsNominalMicroHz), gFs.residualNs(), i2s.lPp, i2s.rPp);
 
       // NOMINAL→NTPへ切り替わった瞬間、規正済みfsでGoertzelを作り直す。
-      // **fsはコンストラクタで固定される設計なので、作り直す以外に追従する方法がない**
-      // (→ Goertzel.h)。cyclesQ16は継続させる(絶対累積位相を後退させない不変条件)。
-      // 旧オブジェクトは意図的にdeleteしない: Core1(i2sTask)がaddSample()実行中に
-      // このポインタを参照している可能性があり、delete するとuse-after-freeになる。
-      // この切り替えは通常運用でセッションに1回しか起きないので、
-      // 数百バイトのリークは実害が無い。
       const bool nowNtp = gFs.source() == timebase::Source::kNtp;
       digitalWrite(kLedTimebaseLockPin, nowNtp ? HIGH : LOW);
       if (nowNtp && !gFsSourceWasNtp) {
-        gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
-        const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
-        gRecordGoertzel.store(
-            new gridfreq::GoertzelEstimator(gFNominalHz, static_cast<double>(gFs.fsMicroHz()) / 1e6,
-                                             1.0, seedCycles),
-            std::memory_order_relaxed);
-        Serial.printf("# fs locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
-                      "resid_ns=%u\n",
-                      static_cast<double>(gFs.fsMicroHz()) / 1e6,
-                      static_cast<unsigned long long>(seedCycles), gFs.obsCount(),
-                      gFs.residualNs());
+        rearmRecordGoertzel(static_cast<double>(gFs.fsMicroHz()) / 1e6, "fs locked",
+                            gFs.obsCount(), gFs.residualNs());
       }
       gFsSourceWasNtp = nowNtp;
 
@@ -675,21 +683,21 @@ void measurementTask(void*) {
 
       const bool nowPps = gPps.source() == timebase::Source::kPps;
       digitalWrite(kLedPpsLockPin, nowPps ? HIGH : LOW);
-      if (nowPps && !gPpsSourceWasPps) {
+      if (nowPps) {
         // NTPロック時と同じ手順(2段目)。PPSはNTPよりさらに精度が良いので、
         // NTPで一度武装した後でもPPSロック時にもう一段作り直す価値がある。
-        gridfreq::GoertzelEstimator* prev = gRecordGoertzel.load(std::memory_order_relaxed);
-        const uint64_t seedCycles = prev != nullptr ? prev->cyclesQ16() : 0;
-        gRecordGoertzel.store(
-            new gridfreq::GoertzelEstimator(gFNominalHz,
-                                             static_cast<double>(gPps.fsMicroHz()) / 1e6, 1.0,
-                                             seedCycles),
-            std::memory_order_relaxed);
-        Serial.printf("# pps locked: goertzel re-armed fs=%.6f seed_cycles_q16=%llu obs=%u "
-                      "resid_ns=%u\n",
-                      static_cast<double>(gPps.fsMicroHz()) / 1e6,
-                      static_cast<unsigned long long>(seedCycles), gPps.obsCount(),
-                      gPps.residualNs());
+        // ロック後も回帰は収束し続けるので、武装時のfsから離れたら作り直す。
+        // ロックの瞬間だけで作り直すと、その時点のfsが外れていた場合に
+        // ロックが切れるまで(実機で13日以上)外れたfsのまま窓を切り続ける
+        // (→ docs/log/2026-10-11-goertzel-stale-fs-after-pps-relock.md)。
+        const double ppsFs = static_cast<double>(gPps.fsMicroHz()) / 1e6;
+        gridfreq::GoertzelEstimator* cur = gRecordGoertzel.load(std::memory_order_relaxed);
+        const bool drifted =
+            cur != nullptr && std::fabs(cur->fsHz() / ppsFs - 1.0) * 1e6 > kGoertzelRearmPpm;
+        if (!gPpsSourceWasPps || drifted) {
+          rearmRecordGoertzel(ppsFs, gPpsSourceWasPps ? "pps fs drifted" : "pps locked",
+                              gPps.obsCount(), gPps.residualNs());
+        }
       }
       gPpsSourceWasPps = nowPps;
     }

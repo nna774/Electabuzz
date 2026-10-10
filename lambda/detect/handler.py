@@ -45,6 +45,8 @@ VOLTAGE_DEV_HOLD_RECORDS = int(os.environ.get("ELBZ_VOLTAGE_DEV_HOLD_RECORDS", "
 # hardware.mdの実測基準点(トランス二次側、AC100V入力時)を既定にしている。
 # AFE換算は1点校正のみの暫定値なので、この閾値も暫定——実測で校正すること。
 NOMINAL_V_RMS_MV = float(os.environ.get("ELBZ_NOMINAL_V_RMS_MV", "10300"))
+# 健全時の記録間隔の誤差は30ppm未満(実測)。1000ppmは周波数で約50mHzの見かけの偏りに相当する。
+CADENCE_ERROR_PPM = float(os.environ.get("ELBZ_CADENCE_ERROR_PPM", "1000"))
 
 JST = dt.timezone(dt.timedelta(hours=9))
 
@@ -52,11 +54,13 @@ EVENT_TITLES = {
     grid_detect.FreqDeviation: "周波数逸脱を検知",
     grid_detect.RoCoF: "急激な周波数変化(RoCoF)を検知",
     grid_detect.VoltageAnomaly: "電圧異常を検知",
+    grid_detect.RecordCadence: "記録間隔の異常を検知(測定器側の故障)",
 }
 PEAK_LABELS = {
     grid_detect.FreqDeviation: lambda v: f"{v * 1000:.1f} mHz",
     grid_detect.RoCoF: lambda v: f"{v * 1000:.1f} mHz/s",
     grid_detect.VoltageAnomaly: lambda v: f"{v * 100:.1f} %",
+    grid_detect.RecordCadence: lambda v: f"{v * 1e6:.0f} ppm",
 }
 
 # dashboard/app.jsのEVENT_VIEW_MINUTES(#minutesが選べるプリセット)と同じ値。
@@ -102,20 +106,30 @@ def _process(key: str) -> None:
     batch = wire_gridfreq.parse(body)
     h = batch.header
 
-    prev_tail = _prev_boundary_sample_batch(bucket, h)
-    batches = ([prev_tail] if prev_tail is not None else []) + [batch]
-    samples = grid_detect.samples_from_batches(batches)
+    prev = _fetch_prev_batch(bucket, h)
+    cadence_error = grid_detect.record_cadence_error(prev, batch) if prev is not None else None
+    if cadence_error is not None and abs(cadence_error) * 1e6 > CADENCE_ERROR_PPM:
+        # 記録窓の長さが公称と違うので、周波数・RoCoF・電圧のどれも測定値として信用できない。
+        # それらを判定すると故障が直るまで偽の系統イベントを出し続けるため、故障だけを記録する。
+        ts = batch.timestamps_us()
+        detections = [grid_detect.Detection(
+            grid_detect.RecordCadence, h.batch_start_us, ts[-1] if ts else h.batch_start_us,
+            abs(cadence_error))]
+    else:
+        prev_tail = _boundary_tail(prev, h) if prev is not None else None
+        batches = ([prev_tail] if prev_tail is not None else []) + [batch]
+        samples = grid_detect.samples_from_batches(batches)
 
-    detections = grid_detect.analyze(
-        samples,
-        f_nominal_hz=h.f_nominal_hz,
-        freq_dev_threshold_hz=FREQ_DEV_THRESHOLD_HZ,
-        freq_dev_hold_records=FREQ_DEV_HOLD_RECORDS,
-        voltage_dev_fraction=VOLTAGE_DEV_FRACTION,
-        voltage_dev_hold_records=VOLTAGE_DEV_HOLD_RECORDS,
-        nominal_v_rms_mv=NOMINAL_V_RMS_MV,
-        rocof_threshold_hz_per_s=ROCOF_THRESHOLD_HZ_PER_S,
-    )
+        detections = grid_detect.analyze(
+            samples,
+            f_nominal_hz=h.f_nominal_hz,
+            freq_dev_threshold_hz=FREQ_DEV_THRESHOLD_HZ,
+            freq_dev_hold_records=FREQ_DEV_HOLD_RECORDS,
+            voltage_dev_fraction=VOLTAGE_DEV_FRACTION,
+            voltage_dev_hold_records=VOLTAGE_DEV_HOLD_RECORDS,
+            nominal_v_rms_mv=NOMINAL_V_RMS_MV,
+            rocof_threshold_hz_per_s=ROCOF_THRESHOLD_HZ_PER_S,
+        )
 
     n = notify.from_env()
     for d in detections:
@@ -132,14 +146,8 @@ def _process(key: str) -> None:
         )
 
 
-def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gridfreq.Batch | None:
-    """直前バッチの最後の1レコードだけを、1レコードの疑似バッチとして返す。
-
-    周波数計算(`grid_detect.samples_from_batches`)がバッチ境界をまたいで連続性を
-    保てるようにするためだけの取得で、直前バッチ全体は読まない——読むと、その
-    バッチ内で既に確定済みのrunを毎回このバッチの到着のたびに再評価してしまい、
-    `grid_events.record`が(セッションマージの時間窓を過ぎていれば)「新規」と
-    誤判定してSlackを埋める。
+def _fetch_prev_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gridfreq.Batch | None:
+    """直前バッチを取得する。
 
     直前バッチのキーは生存台帳(`NAMZ_DEVICES_TABLE`)の`prev_batch_key`から
     `GetItem`一発で分かる(ingestが`record_batch(..., track_prev_key=True)`で
@@ -147,6 +155,28 @@ def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gr
     時間窓を探しに行っていたが、バッチ到着(実測30秒間隔)のたびに無期限で
     Listが飛び続けS3コストを底上げしていたため置き換えた
     (→ docs/log/2026-08-23-detect-listobjectsv2-cost-and-prev-batch-key-design.md)。
+
+    本当に「直前」かはここでは保証しない(→ `_boundary_tail`)。
+    """
+    item = devices.get_device(h.device_id)
+    key = item.get("prev_batch_key") if item else None
+    if not key:
+        return None
+    try:
+        prev = wire_gridfreq.parse(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    except Exception:  # noqa: BLE001
+        return None
+    return prev if prev.records else None
+
+
+def _boundary_tail(prev: wire_gridfreq.Batch, h: wire_gridfreq.Header) -> wire_gridfreq.Batch | None:
+    """直前バッチの最後の1レコードだけを、1レコードの疑似バッチとして返す。
+
+    周波数計算(`grid_detect.samples_from_batches`)がバッチ境界をまたいで連続性を
+    保てるようにするためだけの取得で、直前バッチ全体は読まない——読むと、その
+    バッチ内で既に確定済みのrunを毎回このバッチの到着のたびに再評価してしまい、
+    `grid_events.record`が(セッションマージの時間窓を過ぎていれば)「新規」と
+    誤判定してSlackを埋める。
 
     `ingest`は`series/`へのS3 PUT(このLambdaを起動する側)の**後**に
     `devices.record_batch`を呼んでいるので、稀に`prev_batch_key`がまだ
@@ -164,16 +194,6 @@ def _prev_boundary_sample_batch(bucket: str, h: wire_gridfreq.Header) -> wire_gr
     レンジをフェッチの時点で適用することで、電圧異常側にもガードが効くように
     している。外れた場合は「直前バッチ無し」と同じ`None`扱いに落ちる。
     """
-    item = devices.get_device(h.device_id)
-    key = item.get("prev_batch_key") if item else None
-    if not key:
-        return None
-    try:
-        prev = wire_gridfreq.parse(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
-    except Exception:  # noqa: BLE001
-        return None
-    if not prev.records:
-        return None
     last_t = prev.timestamps_us()[-1]
     nominal_dt = 1000.0 / h.record_rate_mhz if h.record_rate_mhz > 0 else None
     gap_s = (h.batch_start_us - last_t) / 1e6

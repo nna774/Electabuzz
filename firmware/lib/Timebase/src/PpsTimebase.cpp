@@ -22,12 +22,16 @@ void PpsTimebase::reset() {
   ticks0_ = lastTicks_ = xCursor_ = totalEdges_ = 0.0;
   n_ = 0;
   meanX_ = meanY_ = cxx_ = cxy_ = cyy_ = 0.0;
-  // rejected_ は残す。捨てた総数は「エッジ検出かPPS自体の質」の指標なので、
+  // rejected_・restarts_ は残す。捨てた総数は「エッジ検出かPPS自体の質」の指標なので、
   // ティック源が切れるたびに 0 に戻すと見えなくなる。
 }
 
-bool PpsTimebase::usable() const {
+bool PpsTimebase::fitted() const {
   return n_ >= kMinObs && totalEdges_ >= static_cast<double>(kMinSpanSeconds) && cxx_ > 0.0;
+}
+
+bool PpsTimebase::usable() const {
+  return fitted() && slopeSigmaNs() <= static_cast<double>(kMaxResidualNs);
 }
 
 double PpsTimebase::predictY(double x) const {
@@ -59,7 +63,7 @@ bool PpsTimebase::acceptEdge(double ticks, double expectedEdges) {
   const double y = (ticks - ticks0_) - nominalHz_ * x;
 
   // 回帰が立っていれば、そこから大きく外れた標本を捨てる。
-  if (usable()) {
+  if (fitted()) {
     const double s2 = residualSumSquares() / static_cast<double>(n_ - 2);
     const double guardTicks = std::sqrt(s2) * kOutlierSigma;
     const double floorTicks = nominalHz_ * kOutlierFloorSeconds;
@@ -84,9 +88,19 @@ bool PpsTimebase::acceptEdge(double ticks, double expectedEdges) {
   totalEdges_ += expectedEdges;
   lastTicks_ = ticks;
 
-  // 原点を直近の観測点へロールフォワードする。usable()になってから始める
+  if (fitted() && !usable()) {
+    // 偽エッジで偏った回帰は後から正常な標本を積んでも直らないので、ここから取り直す。
+    reset();
+    ++restarts_;
+    have0_ = true;
+    ticks0_ = ticks;
+    lastTicks_ = ticks;
+    return true;
+  }
+
+  // 原点を直近の観測点へロールフォワードする。fitted()になってから始める
   // ——回帰がまだ不安定なうちにxNewを原点に据えても意味のある基準点にならない。
-  if (usable()) {
+  if (fitted()) {
     rollForwardOrigin(x);
     xCursor_ = 0.0;
   }
@@ -142,14 +156,19 @@ uint64_t PpsTimebase::fsMicroHz() const {
   return static_cast<uint64_t>(fsHz * 1e6 + 0.5);
 }
 
-uint32_t PpsTimebase::residualNs() const {
-  if (!usable() || n_ < 3) return 0xFFFFFFFFu;  // 未知は「最悪」で申告する
+double PpsTimebase::slopeSigmaNs() const {
+  if (!fitted() || n_ < 3) return HUGE_VAL;  // 未知は「最悪」として扱う
   const double s2 = residualSumSquares() / static_cast<double>(n_ - 2);
   const double sigmaSlope = std::sqrt(s2 / cxx_);  // [ticks/s] の 1σ
   const double fsHz = nominalHz_ + cxy_ / cxx_;
-  if (!(fsHz > 0.0)) return 0xFFFFFFFFu;
+  if (!(fsHz > 0.0)) return HUGE_VAL;
   // 相対誤差 = 1秒あたりに積み上がる時刻偏差の割合。ns/s に直す。
-  return saturate(sigmaSlope / fsHz * 1e9);
+  return sigmaSlope / fsHz * 1e9;
+}
+
+uint32_t PpsTimebase::residualNs() const {
+  if (!usable()) return 0xFFFFFFFFu;  // 未知は「最悪」で申告する
+  return saturate(slopeSigmaNs());
 }
 
 uint32_t PpsTimebase::fitRmsNs() const {

@@ -18,6 +18,7 @@ double wrapToPi(double x) {
 GoertzelEstimator::GoertzelEstimator(double fNominalHz, double fs, double windowSec,
                                       uint64_t initialCyclesQ16)
     : fNominalHz_(fNominalHz),
+      fsHz_(fs),
       windowSec_(windowSec),
       cyclesAccum_(static_cast<double>(initialCyclesQ16) / 65536.0),
       cyclesQ16_(initialCyclesQ16) {

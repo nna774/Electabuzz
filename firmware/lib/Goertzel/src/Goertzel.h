@@ -55,9 +55,12 @@ class GoertzelEstimator {
   double magnitude() const { return mag_; }  // 0 に近いと位相が定義できず信用できない
 
   size_t windowSamples() const { return winN_; }
+  // コンストラクタで固定したfs。呼び出し側が作り直しの要否を判断するのに使う。
+  double fsHz() const { return fsHz_; }
 
  private:
   double fNominalHz_;
+  double fsHz_;
   double windowSec_;
   size_t winN_;
   double coeff_;      // 2cos(theta)。再帰の係数

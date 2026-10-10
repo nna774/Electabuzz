@@ -142,3 +142,29 @@ def test_voltage_anomaly_suppressed_during_power_fail():
     samples = _samples([50.0] * 5, v=12_000, power_fail=True)
     dets = gd.analyze(samples, **THRESH)
     assert not [d for d in dets if d.event_type == gd.VoltageAnomaly]
+
+
+# --- record_cadence_error ---
+
+def _n_batch(*, start_us, n=30, session_id=1, flags=0):
+    return _batch(start_us=start_us, freqs_hz=[50.0] * n, session_id=session_id, flags=flags)
+
+
+def test_record_cadence_error_measures_ratio_against_record_count():
+    prev = _n_batch(start_us=0)
+    cur = _n_batch(start_us=30_127_000)
+    assert gd.record_cadence_error(prev, cur) == pytest.approx(127_000 / 30_000_000)
+
+
+def test_record_cadence_error_none_across_sessions():
+    assert gd.record_cadence_error(_n_batch(start_us=0), _n_batch(start_us=30_000_000, session_id=2)) is None
+
+
+def test_record_cadence_error_none_with_discontinuity():
+    prev = _n_batch(start_us=0)
+    cur = _n_batch(start_us=31_000_000, flags=int(BatchFlag.DISCONTINUITY))
+    assert gd.record_cadence_error(prev, cur) is None
+
+
+def test_record_cadence_error_none_when_batches_are_missing_between():
+    assert gd.record_cadence_error(_n_batch(start_us=0), _n_batch(start_us=60_000_000)) is None

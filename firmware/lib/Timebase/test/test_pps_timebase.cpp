@@ -142,6 +142,32 @@ int main() {
     check("逆行直後はNOMINAL", tb.source() == timebase::Source::kNominal);
   }
 
+  // --- 7. 偽エッジが混じった回帰はロックを名乗らないか ---
+  // 2026-09-27の実機事例: 外乱で間隔±5%以内の偽エッジが回帰に入り、残差~1ms/sのまま
+  // ロック扱いになった(→ docs/log/2026-10-11-goertzel-stale-fs-after-pps-relock.md)。
+  {
+    Lcg rng;
+    timebase::PpsTimebase tb(kNominalUHz);
+    const double trueHz = kNominalHz * (1.0 + 3.8873 * 1e-6);
+    int edge = 0;
+    for (; edge < 10; ++edge) {
+      tb.addEdge(trueHz * static_cast<double>(edge) + rng.next() * 1500.0);
+    }
+    for (; edge < 40; ++edge) tb.addEdge(trueHz * static_cast<double>(edge));
+    check("偽エッジ混じりの回帰はNOMINALのまま", tb.source() == timebase::Source::kNominal);
+    check("偽エッジ混じりの回帰はfsを公称値で返す", tb.fsMicroHz() == kNominalUHz);
+    check("確度不足の回帰は取り直される", tb.restartCount() >= 1);
+
+    while (!tb.usable() && edge < 100000) {
+      tb.addEdge(trueHz * static_cast<double>(edge));
+      ++edge;
+    }
+    check("正常なエッジが続けばいずれロックする", tb.usable());
+    const double ppm = (static_cast<double>(tb.fsMicroHz()) / static_cast<double>(kNominalUHz) - 1.0) * 1e6;
+    checkNear("ロック時点のfsは実ppmを復元する", ppm, 3.8873, 0.05);
+    check("取り直し後は最短(kMinSpanSeconds+α)でロックする", edge <= 80);
+  }
+
   if (gFailures == 0) {
     printf("all tests passed\n");
     return 0;

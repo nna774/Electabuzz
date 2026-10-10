@@ -142,3 +142,9 @@ variable "nominal_v_rms_mv" {
   default     = 10300
   description = "電圧異常判定の基準点[mV]。docs/hardware.mdの実測値(AC100V入力時のトランス二次側実効値)。AFE換算(v_rms_mv)は1点校正のみの暫定値なので、この閾値も暫定——実測で校正すること。"
 }
+
+variable "cadence_error_ppm" {
+  type        = number
+  default     = 1000
+  description = "記録間隔異常(バッチ間の実時間とレコード数×公称間隔のずれ)の判定しきい値[ppm]。健全時は30ppm未満(実測)。超えたバッチは周波数・電圧の判定から除外する(→ docs/cloud.md「detect」)。"
+}

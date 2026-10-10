@@ -150,6 +150,12 @@ static constexpr double kPpsEdgeThreshold = 100000.0;  // TODO: 実測後に決�
 // PPSは1Hzなので、その半分の秒数ぶんを不応期に取る(→ PpsEdgeDetector.h)。
 static constexpr uint64_t kPpsEdgeRefractorySamples = kFsNominalHz / 2;
 
+// PPSロック中、記録用Goertzelが武装時に固定したfsとPPS回帰のfsがこれ[ppm]以上
+// ずれたら作り直す。2ppmのfs誤差は周波数で0.1mHzに相当し測定上は無視できる一方、
+// 作り直しのたびに1窓が欠けるので、ロック直後の収束で頻発しない程度に緩めてある
+// (PPSのロック条件はPpsTimebase::kMaxResidualNs=1ppm)。
+static constexpr double kGoertzelRearmPpm = 2.0;
+
 // --- AFE: ADCコード → v_rms_mv(トランス二次側の実効値) 換算 (2026-08-14) ---
 //
 // `v_rms_mv`の基準点はトランス二次側[mV]と決定済み(→ docs/wire-format.md,

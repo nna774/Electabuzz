@@ -98,6 +98,11 @@ def test_continuing_session_does_not_renotify(monkeypatch):
     assert fake.calls == []
 
 
+def _tail(h, cur_header):
+    prev = h._fetch_prev_batch("elbz-test-bucket", cur_header)
+    return h._boundary_tail(prev, cur_header) if prev is not None else None
+
+
 def test_prev_boundary_sample_batch_uses_devices_prev_key(monkeypatch):
     """生存台帳のprev_batch_keyをGetItemで読み、get_object一発で直前バッチの
     末尾レコードを取れることを確認する(→ ListObjectsV2を置き換えた変更)。"""
@@ -115,7 +120,7 @@ def test_prev_boundary_sample_batch_uses_devices_prev_key(monkeypatch):
     monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: prev_batch)
 
     cur_header = _header(batch_start_us=2_000_000, record_count=1)
-    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+    tail = _tail(h, cur_header)
 
     assert seen_keys == ["series/2026/08/23/00/0001-x.bin"]
     assert tail is not None
@@ -128,7 +133,7 @@ def test_prev_boundary_sample_batch_none_when_no_prev_key(monkeypatch):
     monkeypatch.setenv("ELBZ_BUCKET", "elbz-test-bucket")
     monkeypatch.setattr(h.devices, "get_device", lambda device_id: {})  # prev_batch_key無し
 
-    tail = h._prev_boundary_sample_batch("elbz-test-bucket", _header(batch_start_us=2_000_000))
+    tail = _tail(h, _header(batch_start_us=2_000_000))
 
     assert tail is None
 
@@ -152,7 +157,7 @@ def test_prev_boundary_sample_batch_rejects_stale_two_batches_back(monkeypatch):
     monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: stale_prev)
 
     cur_header = _header(batch_start_us=31_000_000, record_count=1)
-    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+    tail = _tail(h, cur_header)
 
     assert tail is None
 
@@ -169,7 +174,7 @@ def test_prev_boundary_sample_batch_rejects_future_prev(monkeypatch):
     monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: future_prev)
 
     cur_header = _header(batch_start_us=1_000_000, record_count=1)
-    tail = h._prev_boundary_sample_batch("elbz-test-bucket", cur_header)
+    tail = _tail(h, cur_header)
 
     assert tail is None
 
@@ -250,3 +255,52 @@ def test_no_nominal_freq_skips_freq_deviation_but_keeps_others(monkeypatch):
     h.handler(_event(), None)
 
     assert "freq_deviation" not in recorded_types
+
+
+def _steady_batch(*, start_us, n=30, session_id=1, flags=0, freq_hz=50.3, v_rms_mv=13_000):
+    """公称1秒間隔・一定周波数・一定電圧のバッチ。既定値はどれもしきい値を超える。"""
+    records = tuple(Record(cycles_q16=int(round(i * freq_hz * 65536)), v_rms_mv=v_rms_mv, flags=0)
+                    for i in range(n))
+    return Batch(header=_header(batch_start_us=start_us, record_count=n, session_id=session_id,
+                                flags=flags), records=records)
+
+
+def _handler_with_prev(monkeypatch, prev, cur):
+    h, fake = _handler(monkeypatch)
+    monkeypatch.setattr(h.devices, "get_device",
+                        lambda device_id: {"prev_batch_key": "series/prev.bin"})
+    monkeypatch.setattr(h.s3, "get_object",
+                        lambda Bucket, Key: {"Body": FakeBody(b"prev" if Key == "series/prev.bin" else b"cur")})
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: prev if body == b"prev" else cur)
+    recorded = []
+    monkeypatch.setattr(h.grid_events, "record",
+                        lambda device_id, event_type, onset, last, peak: (
+                            recorded.append((event_type, peak)),
+                            (f"{device_id:04d}-{event_type}-0", True))[1])
+    return h, fake, recorded
+
+
+def test_record_cadence_error_replaces_grid_detections(monkeypatch):
+    """2026-09-27〜の実機事例: 30レコードのバッチが実時間30.127秒ごとに来ていた。
+    記録窓が公称より長いので周波数・電圧の逸脱は偽物で、故障だけを記録する。"""
+    prev = _steady_batch(start_us=0)
+    cur = _steady_batch(start_us=30_127_000)
+    h, fake, recorded = _handler_with_prev(monkeypatch, prev, cur)
+
+    h.handler(_event(), None)
+
+    assert [e for e, _ in recorded] == ["record_cadence"]
+    assert abs(recorded[0][1] - 127_000 / 30_000_000) < 1e-9
+    assert fake.calls[0]["title"] == "記録間隔の異常を検知(測定器側の故障)"
+
+
+def test_healthy_cadence_keeps_grid_detections(monkeypatch):
+    prev = _steady_batch(start_us=0)
+    cur = _steady_batch(start_us=30_000_500)  # 17ppm。健全時の実測範囲
+    h, fake, recorded = _handler_with_prev(monkeypatch, prev, cur)
+
+    h.handler(_event(), None)
+
+    kinds = {e for e, _ in recorded}
+    assert "record_cadence" not in kinds
+    assert {"freq_deviation", "voltage_anomaly"} <= kinds
