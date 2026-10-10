@@ -99,8 +99,13 @@ PR #96をsquashマージ(`61b2c44`)し、`main`から`build_lambda.sh`→`terraf
 - detectのCloudWatch Logs・メトリクスは`electabuzz-admin`ロールに読み取り権限が
   無く、apply後のdetectの実行結果は直接確認できていない
 
-## 未完了
+## dashboardのデプロイ(同日)
 
-- dashboardのデプロイ(`record_cadence`のラベル表示)。`aws s3 cp`がClaude Code側の
-  権限で止められたので、手で実行する必要がある
+`main`と同一の`app.js`(`record_cadence`のラベル追加のみ。`index.html`・`config.js`は
+本番と一致していた)をS3へ上げ、CloudFrontをinvalidationした。配信中の`app.js`に
+`record_cadence`が含まれることを確認した。本件の作業はこれで全て完了した。
+
+## 残った別件
+
+- 電圧異常の基準点(10300mV)・閾値の校正。今のv_rmsは約11.1Vで、再起動直後に誤検知が出た
 - 09-27 02:38・09:08頃のv_rms 25Vへの跳ねとPPS途絶の物理的な原因は不明
