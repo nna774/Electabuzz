@@ -18,6 +18,8 @@ import wire_gridfreq
 FreqDeviation = "freq_deviation"
 RoCoF = "rocof"
 VoltageAnomaly = "voltage_anomaly"
+# 記録間隔の異常(測定器側の故障。系統の事象ではない)。
+RecordCadence = "record_cadence"
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,7 @@ class Detection:
     last_us: int
     peak_value: float
     """freq_deviation: |f-f_nom|のピーク[Hz] / rocof: |df/dt|のピーク[Hz/s] /
-    voltage_anomaly: |v-v_nom|/v_nomのピーク(比率)"""
+    voltage_anomaly: |v-v_nom|/v_nomのピーク(比率) / record_cadence: 記録間隔の誤差(比率)"""
 
 
 def samples_from_batches(batches: list[wire_gridfreq.Batch]) -> list[Sample]:
@@ -78,6 +80,30 @@ def samples_from_batches(batches: list[wire_gridfreq.Batch]) -> list[Sample]:
                 prev_session, prev_t, prev_cycles = None, None, None
 
     return samples
+
+
+def record_cadence_error(prev: wire_gridfreq.Batch, cur: wire_gridfreq.Batch) -> float | None:
+    """直前バッチの開始から今回の開始までの実時間が、直前バッチのレコード数×公称間隔から
+    どれだけずれているか(比率)。
+
+    バッチ内のレコード時刻は公称間隔で並べた値で、実時間を持つのは`batch_start_us`
+    (firmwareがNTP回帰から付ける)だけなので、記録窓の実際の長さはバッチ間でしか測れない。
+    firmwareが外れたfsで窓を切っていると、ここが公称から一定方向にずれ続ける
+    (→ docs/log/2026-10-11-goertzel-stale-fs-after-pps-relock.md)。
+
+    評価できない組み合わせ(セッション違い・DISCONTINUITY付き・バッチ欠落を挟む)はNone。
+    """
+    hp, hc = prev.header, cur.header
+    if hp.session_id != hc.session_id or hp.record_rate_mhz <= 0 or not prev.records:
+        return None
+    if (hp.batch_flags | hc.batch_flags) & wire_gridfreq.BatchFlag.DISCONTINUITY:
+        return None
+    expected_us = len(prev.records) * 1e9 / hp.record_rate_mhz
+    ratio = (hc.batch_start_us - hp.batch_start_us) / expected_us
+    # 0.5〜1.5倍の外は「間のバッチが欠けた」等で、記録間隔の誤差としては読めない。
+    if not 0.5 <= ratio <= 1.5:
+        return None
+    return ratio - 1.0
 
 
 def _runs(flags: list[bool]) -> list[tuple[int, int]]:

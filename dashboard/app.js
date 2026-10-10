@@ -21,12 +21,16 @@ const SOURCE_CLASS = { NOMINAL: 'badge-nominal', NTP: 'badge-ntp', PPS: 'badge-p
 
 // detectが確定したイベントの種類ラベル・ピーク値の単位(→ lambda/detect/handler.py
 // のEVENT_TITLES/PEAK_LABELSと対応、同じ単位で表示を揃える)。
-const EVENT_TYPE_LABEL = { freq_deviation: '周波数逸脱', rocof: 'RoCoF(急変)', voltage_anomaly: '電圧異常' };
+const EVENT_TYPE_LABEL = {
+  freq_deviation: '周波数逸脱', rocof: 'RoCoF(急変)', voltage_anomaly: '電圧異常',
+  record_cadence: '記録間隔異常(測定器)',
+};
 
 function formatPeakValue(eventType, peak) {
   if (eventType === 'freq_deviation') return (peak * 1000).toFixed(1) + ' mHz';
   if (eventType === 'rocof') return (peak * 1000).toFixed(1) + ' mHz/s';
   if (eventType === 'voltage_anomaly') return (peak * 100).toFixed(1) + ' %';
+  if (eventType === 'record_cadence') return (peak * 1e6).toFixed(0) + ' ppm';
   return String(peak);
 }
 

@@ -174,7 +174,7 @@ def _record_liveness(device_id: int, batch_start_us: int, key: str, fw_version: 
 
     テーブル未設定なら黙って何もしない(単体テスト等、DynamoDBに触れない環境向け)。
 
-    `track_prev_key=True`: detect(`_prev_boundary_sample_batch`)がバッチ境界を
+    `track_prev_key=True`: detect(`_fetch_prev_batch`)がバッチ境界を
     またぐ周波数計算の連続性のために直前バッチを引けるよう、生存台帳に
     `prev_batch_key`を残す(→ docs/batch-uplink.md「バージョン分岐」)。
     Namazuはこの引数を使わないのでデフォルトFalseのまま。
