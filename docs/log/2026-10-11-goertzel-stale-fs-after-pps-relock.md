@@ -64,9 +64,23 @@
   維持し、記録間隔異常だけを例外にした。`DISCONTINUITY`と違い、firmwareが
   自分では気付けず、どのフラグにも現れない故障だからである
 
+## OTA配信と再起動試験(同日)
+
+PRブランチのHEAD(`a64d869`、未マージ)を`tools/publish_ota.sh`→`tools/request_ota.py`で
+device 1へ配信し、OTAの再起動を兼ねて動作を確認した。01:41:52 JSTにsession 30で復帰。
+
+| | 更新前(session 29) | 更新後(session 30) |
+|---|---|---|
+| バッチ末尾→次バッチ先頭の実時間 | 1.127 s | 1.001 s |
+| 30レコードのΔcycles | 1455〜1458(≒50.2Hz) | 1449〜1451(≒50.0Hz) |
+| v_rms_mvのバッチ内の幅 | 200〜1100mV | 70〜150mV |
+
+- PPSは31エッジ・残差20ns/sでロックした。1ppmの確度条件は正常時のロックを遅らせない
+- ロック時の作り直しで、最初のバッチに`DISCONTINUITY`(flags=0x7)が立った
+- 1.001 sは、NTP未ロックの間`batch_start_us`を公称fsで外挿しているためのずれ(約35ppm)で、
+  `record_cadence`の閾値(1000ppm)より十分小さい
+
 ## 未完了
 
-- 実機は依然として外れた`fs`のまま動いている。**再起動すれば直る見込み**
-  (現在のPPS回帰は健全なので、再ロック時に正しい`fs`で作り直される)
-- firmwareのOTA配信、detect/terraformの`apply`、dashboardのデプロイはまだ
+- PRのマージ、detect/terraformの`apply`、dashboardのデプロイはまだ
 - 09-27 02:38・09:08頃のv_rms 25Vへの跳ねとPPS途絶の物理的な原因は不明
