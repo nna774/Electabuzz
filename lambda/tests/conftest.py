@@ -3,6 +3,8 @@ import os
 import sys
 import types
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAMBDA_ROOT = os.path.dirname(HERE)
 REPO_ROOT = os.path.dirname(LAMBDA_ROOT)
@@ -10,6 +12,24 @@ REPO_ROOT = os.path.dirname(LAMBDA_ROOT)
 sys.path.insert(0, LAMBDA_ROOT)
 
 GOLDEN_PATH = os.path.join(REPO_ROOT, "testdata", "gfrq_v1_golden.hex")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_aws(monkeypatch):
+    """テストから本物のAWSへ届く経路を断つ。
+
+    テストは`NAMZ_DEVICES_TABLE`に本番と同じテーブル名を入れて一部の関数だけ差し替えて
+    いるので、差し替え漏れがあると`.envrc`の`AWS_PROFILE`で本番の生存台帳へ書き込む。
+    実際にgoldenの`device_id=2`の行が作られ、watchdogが存在しないデバイスの欠測を
+    通知し続けた。漏れた呼び出しは接続拒否で即座に失敗させる。
+    """
+    for k in ("AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "1")
 
 
 def load_handler(name: str) -> types.ModuleType:
