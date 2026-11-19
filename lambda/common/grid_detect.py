@@ -10,6 +10,7 @@ Namazuのdetect(地震の震度をFFT窓で再計算する)とは判定の性質
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import wire_gridfreq
@@ -40,6 +41,8 @@ class Detection:
     peak_value: float
     """freq_deviation: |f-f_nom|のピーク[Hz] / rocof: |df/dt|のピーク[Hz/s] /
     voltage_anomaly: |v-v_nom|/v_nomのピーク(比率) / record_cadence: 記録間隔の誤差(比率)"""
+    peak_signed: float | None = None
+    """peak_valueと同じ点の符号付きの値(f-f_nom、df/dt、(v-v_nom)/v_nom)。通知文で向きを示す。"""
 
 
 def samples_from_batches(batches: list[wire_gridfreq.Batch]) -> list[Sample]:
@@ -131,6 +134,7 @@ def analyze(
     voltage_dev_hold_records: int,
     nominal_v_rms_mv: float,
     rocof_threshold_hz_per_s: float,
+    freq_plausible_dev_hz: float = 5.0,
 ) -> list[Detection]:
     """しきい値判定。`samples`は時系列順(1つの`analyze()`呼び出しは1デバイスぶん)。
 
@@ -140,8 +144,21 @@ def analyze(
 
     電圧異常はpower_fail中(AC入力断、→ watchdogが別途通知)は評価しない——
     入力が無い時の電圧はほぼ0Vで、「異常な低電圧」として二重に騒ぐ理由が無い。
+    `nominal_v_rms_mv<=0`なら電圧異常は判定しない。
+
+    公称から`freq_plausible_dev_hz`を超えて外れた周波数は系統の値ではなく
+    cycles跳躍等の測定不良なので、周波数逸脱・RoCoFのどちらにも使わない
+    (→ docs/log/2026-09-01-cycles-jump-wifi-reconnect-correlation.md)。
     """
     detections: list[Detection] = []
+
+    if f_nominal_hz > 0:
+        samples = [
+            dataclasses.replace(s, freq_hz=None)
+            if s.freq_hz is not None and abs(s.freq_hz - f_nominal_hz) > freq_plausible_dev_hz
+            else s
+            for s in samples
+        ]
 
     # f_nominal_hz<=0は「未判別」(→ docs/wire-format.md)。基準が無いのに逸脱は
     # 判定できないので、このバッチでは周波数逸脱の判定を丸ごとスキップする
@@ -154,8 +171,9 @@ def analyze(
         for start, end in _runs(freq_breach):
             if end - start < freq_dev_hold_records:
                 continue
-            peak = max(abs(samples[i].freq_hz - f_nominal_hz) for i in range(start, end))
-            detections.append(Detection(FreqDeviation, samples[start].t_us, samples[end - 1].t_us, peak))
+            signed = max((samples[i].freq_hz - f_nominal_hz for i in range(start, end)), key=abs)
+            detections.append(Detection(
+                FreqDeviation, samples[start].t_us, samples[end - 1].t_us, abs(signed), signed))
 
     if nominal_v_rms_mv > 0:
         volt_breach = [
@@ -166,11 +184,13 @@ def analyze(
         for start, end in _runs(volt_breach):
             if end - start < voltage_dev_hold_records:
                 continue
-            peak = max(
-                abs(samples[i].v_rms_mv - nominal_v_rms_mv) / nominal_v_rms_mv
-                for i in range(start, end)
+            signed = max(
+                ((samples[i].v_rms_mv - nominal_v_rms_mv) / nominal_v_rms_mv
+                 for i in range(start, end)),
+                key=abs,
             )
-            detections.append(Detection(VoltageAnomaly, samples[start].t_us, samples[end - 1].t_us, peak))
+            detections.append(Detection(
+                VoltageAnomaly, samples[start].t_us, samples[end - 1].t_us, abs(signed), signed))
 
     for prev, cur in zip(samples, samples[1:]):
         if prev.freq_hz is None or cur.freq_hz is None:
@@ -180,6 +200,6 @@ def analyze(
             continue
         rocof = (cur.freq_hz - prev.freq_hz) / dt_s
         if abs(rocof) > rocof_threshold_hz_per_s:
-            detections.append(Detection(RoCoF, prev.t_us, cur.t_us, abs(rocof)))
+            detections.append(Detection(RoCoF, prev.t_us, cur.t_us, abs(rocof), rocof))
 
     return detections

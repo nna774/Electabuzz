@@ -168,3 +168,30 @@ def test_record_cadence_error_none_with_discontinuity():
 
 def test_record_cadence_error_none_when_batches_are_missing_between():
     assert gd.record_cadence_error(_n_batch(start_us=0), _n_batch(start_us=60_000_000)) is None
+
+
+def test_implausible_freq_from_cycles_jump_is_not_a_grid_event():
+    """2026-09-01の実機事例: cycles が1秒で+300進み、瞬時周波数が350Hzに見えた。"""
+    b = _batch(start_us=0, freqs_hz=[50.0, 50.0, 350.0, 350.0, 350.0, 50.0, 50.0])
+    dets = gd.analyze(
+        gd.samples_from_batches([b]), f_nominal_hz=50.0,
+        freq_dev_threshold_hz=0.15, freq_dev_hold_records=3,
+        voltage_dev_fraction=0.1, voltage_dev_hold_records=3, nominal_v_rms_mv=10_500,
+        rocof_threshold_hz_per_s=0.2,
+    )
+    assert dets == []
+
+
+def test_large_but_plausible_drop_is_still_detected():
+    b = _batch(start_us=0, freqs_hz=[50.0, 50.0, 46.2, 46.2, 46.2, 46.2])
+    dets = gd.analyze(
+        gd.samples_from_batches([b]), f_nominal_hz=50.0,
+        freq_dev_threshold_hz=0.15, freq_dev_hold_records=3,
+        voltage_dev_fraction=0.1, voltage_dev_hold_records=3, nominal_v_rms_mv=10_500,
+        rocof_threshold_hz_per_s=0.2,
+    )
+    fd = [d for d in dets if d.event_type == gd.FreqDeviation]
+    assert len(fd) == 1
+    assert fd[0].peak_signed == pytest.approx(-3.8)
+    rocof = [d for d in dets if d.event_type == gd.RoCoF]
+    assert rocof and rocof[0].peak_signed == pytest.approx(-3.8)

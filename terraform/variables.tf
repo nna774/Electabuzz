@@ -143,6 +143,18 @@ variable "nominal_v_rms_mv" {
   description = "電圧異常判定の基準点[mV]。docs/hardware.mdの実測値(AC100V入力時のトランス二次側実効値)。AFE換算(v_rms_mv)は1点校正のみの暫定値なので、この閾値も暫定——実測で校正すること。"
 }
 
+variable "voltage_detection_enabled" {
+  type        = bool
+  default     = false
+  description = "電圧異常を判定するか。v_rms_mvの校正が狂っており、基準(nominal_v_rms_mv)との比較が偽の異常を日に数百件出すため、校正し直すまで止めておく。"
+}
+
+variable "freq_plausible_deviation_hz" {
+  type        = number
+  default     = 5.0
+  description = "公称からこれ以上外れた瞬時周波数は系統の値ではなく測定不良(cycles跳躍等)とみなし、周波数逸脱・RoCoFの判定に使わない[Hz]。"
+}
+
 variable "cadence_error_ppm" {
   type        = number
   default     = 1000
