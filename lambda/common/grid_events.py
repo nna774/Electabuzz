@@ -22,6 +22,8 @@ import boto3
 MERGE_GAP_US = 60_000_000  # 60秒
 # 新規セッションのevent_idを作る際の時刻粒度[us]（読みやすさのため。Namazuと同じ）。
 BUCKET_US = 30_000_000  # 30秒
+# 最新セッションへのポインタ項目のevent_id接頭辞。イベント本体と同じテーブルに置く。
+LATEST_POINTER_PREFIX = "latest#"
 
 _table_cache = None
 
@@ -37,16 +39,50 @@ def event_id(device_id: int, event_type: str, onset_us: int) -> str:
     return f"{device_id:04d}-{event_type}-{onset_us // BUCKET_US:d}"
 
 
-def _latest_event(device_id: int, event_type: str) -> dict | None:
-    """このdevice×event_typeの最新イベント(last_usが最大のもの)。
+def latest_pointer_id(device_id: int, event_type: str) -> str:
+    """device×event_typeごとの最新セッションを指すポインタ項目のキー。"""
+    return f"{LATEST_POINTER_PREFIX}{device_id:04d}-{event_type}"
 
-    単一デバイス想定の簡易scan(Namazuの`_latest_event`と同じ割り切り)。
+
+def is_pointer(item: dict) -> bool:
+    return str(item.get("event_id", "")).startswith(LATEST_POINTER_PREFIX)
+
+
+def _scan_all() -> list[dict]:
+    items: list[dict] = []
+    kwargs: dict = {}
+    while True:
+        resp = _table().scan(**kwargs)
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            return items
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+
+def _latest_event(device_id: int, event_type: str) -> dict | None:
+    """このdevice×event_typeの最新セッション。
+
+    ポインタ項目から`GetItem`で引く。ポインタがまだ無い(導入前から記録がある)
+    ときだけ全件scanで探し、見つけたらポインタを作る。
     """
-    items = [i for i in _table().scan(Limit=1000).get("Items", [])
-             if int(i.get("device_id", -1)) == device_id and i.get("event_type") == event_type]
+    ptr = _table().get_item(Key={"event_id": latest_pointer_id(device_id, event_type)}).get("Item")
+    if ptr:
+        return _table().get_item(Key={"event_id": ptr["latest_event_id"]}).get("Item")
+    items = [i for i in _scan_all()
+             if not is_pointer(i)
+             and int(i.get("device_id", -1)) == device_id and i.get("event_type") == event_type]
     if not items:
         return None
-    return max(items, key=lambda x: int(x.get("last_us", x.get("onset_us", 0))))
+    latest = max(items, key=lambda x: int(x.get("last_us", x.get("onset_us", 0))))
+    _put_pointer(device_id, event_type, latest["event_id"])
+    return latest
+
+
+def _put_pointer(device_id: int, event_type: str, eid: str) -> None:
+    _table().put_item(Item={
+        "event_id": latest_pointer_id(device_id, event_type),
+        "latest_event_id": eid,
+    })
 
 
 def record(device_id: int, event_type: str, onset_us: int, last_us: int,
@@ -81,12 +117,12 @@ def record(device_id: int, event_type: str, onset_us: int, last_us: int,
         "last_us": last_us,
         "peak_value": Decimal(str(peak_value)),
     })
+    _put_pointer(device_id, event_type, eid)
     return eid, True
 
 
 def recent_events(limit: int = 50) -> list[dict]:
-    """最近のイベントを`last_us`降順で返す(Namazuの`events.recent_events`と同じ
-    簡易scan——実機1台・イベント数が少ない前提)。"""
-    items = _table().scan(Limit=1000).get("Items", [])
+    """最近のイベントを`last_us`降順で返す(全件scan。件数が増えたらGSIが要る)。"""
+    items = [i for i in _scan_all() if not is_pointer(i)]
     items.sort(key=lambda x: int(x.get("last_us", x.get("onset_us", 0))), reverse=True)
     return items[:limit]

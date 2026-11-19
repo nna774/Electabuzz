@@ -45,6 +45,10 @@ VOLTAGE_DEV_HOLD_RECORDS = int(os.environ.get("ELBZ_VOLTAGE_DEV_HOLD_RECORDS", "
 # hardware.mdの実測基準点(トランス二次側、AC100V入力時)を既定にしている。
 # AFE換算は1点校正のみの暫定値なので、この閾値も暫定——実測で校正すること。
 NOMINAL_V_RMS_MV = float(os.environ.get("ELBZ_NOMINAL_V_RMS_MV", "10300"))
+# v_rms_mvの校正が狂っている間は電圧異常を判定しない(偽の異常で通知が埋まるため)。
+VOLTAGE_DETECT_ENABLED = os.environ.get("ELBZ_VOLTAGE_DETECT_ENABLED", "0") == "1"
+# 公称からこれ以上外れた周波数は測定不良とみなす。北海道胆振東部地震(2018)の最低値でも約-3.9Hz。
+FREQ_PLAUSIBLE_DEV_HZ = float(os.environ.get("ELBZ_FREQ_PLAUSIBLE_DEV_HZ", "5.0"))
 # 健全時の記録間隔の誤差は30ppm未満(実測)。1000ppmは周波数で約50mHzの見かけの偏りに相当する。
 CADENCE_ERROR_PPM = float(os.environ.get("ELBZ_CADENCE_ERROR_PPM", "1000"))
 
@@ -56,12 +60,23 @@ EVENT_TITLES = {
     grid_detect.VoltageAnomaly: "電圧異常を検知",
     grid_detect.RecordCadence: "記録間隔の異常を検知(測定器側の故障)",
 }
-PEAK_LABELS = {
-    grid_detect.FreqDeviation: lambda v: f"{v * 1000:.1f} mHz",
-    grid_detect.RoCoF: lambda v: f"{v * 1000:.1f} mHz/s",
-    grid_detect.VoltageAnomaly: lambda v: f"{v * 100:.1f} %",
-    grid_detect.RecordCadence: lambda v: f"{v * 1e6:.0f} ppm",
-}
+
+
+def _summary(d: grid_detect.Detection, f_nominal_hz: float) -> str:
+    """通知本文の1文目。向きと実測値が分かる形にする。"""
+    v = d.peak_signed if d.peak_signed is not None else d.peak_value
+    if d.event_type == grid_detect.FreqDeviation:
+        word = "高い" if v > 0 else "低い"
+        return (f"周波数が公称{f_nominal_hz:g}Hzより *{abs(v) * 1000:.0f} mHz {word}*"
+                f"（{f_nominal_hz + v:.3f} Hz）。")
+    if d.event_type == grid_detect.RoCoF:
+        word = "上昇" if v > 0 else "低下"
+        return f"周波数が *{abs(v) * 1000:.0f} mHz/s* で急{word}した。"
+    if d.event_type == grid_detect.VoltageAnomaly:
+        word = "高い" if v > 0 else "低い"
+        return f"電圧が基準より *{abs(v) * 100:.1f}% {word}*。"
+    return (f"記録間隔が公称から *{d.peak_value * 1e6:.0f} ppm* ずれている。"
+            "系統ではなく測定器の時間基準の不具合で、この間の周波数・電圧は判定していない。")
 
 # dashboard/app.jsのEVENT_VIEW_MINUTES(#minutesが選べるプリセット)と同じ値。
 EVENT_VIEW_MINUTES = (1, 5, 15, 30)
@@ -127,8 +142,9 @@ def _process(key: str) -> None:
             freq_dev_hold_records=FREQ_DEV_HOLD_RECORDS,
             voltage_dev_fraction=VOLTAGE_DEV_FRACTION,
             voltage_dev_hold_records=VOLTAGE_DEV_HOLD_RECORDS,
-            nominal_v_rms_mv=NOMINAL_V_RMS_MV,
+            nominal_v_rms_mv=NOMINAL_V_RMS_MV if VOLTAGE_DETECT_ENABLED else 0,
             rocof_threshold_hz_per_s=ROCOF_THRESHOLD_HZ_PER_S,
+            freq_plausible_dev_hz=FREQ_PLAUSIBLE_DEV_HZ,
         )
 
     n = notify.from_env()
@@ -137,12 +153,12 @@ def _process(key: str) -> None:
             h.device_id, d.event_type, d.onset_us, d.last_us, d.peak_value)
         if not is_new:
             continue  # 継続中のセッションへの延長。再送しない
-        label = PEAK_LABELS[d.event_type](d.peak_value)
         n.notify(
             EVENT_TITLES[d.event_type],
-            f"device *{h.device_id:04d}* で検知。ピーク値 *{label}*。",
+            f"device *{h.device_id:04d}*: {_summary(d, h.f_nominal_hz)}"
+            "継続中の延長は通知しない。続いているかはグラフで確認すること。",
             {"デバイス": f"{h.device_id:04d}", "検知時刻": _fmt_time(d.onset_us),
-             "イベント": _event_link(eid, d.onset_us, d.last_us)},
+             "グラフ": _event_link(eid, d.onset_us, d.last_us)},
         )
 
 

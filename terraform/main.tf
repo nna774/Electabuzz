@@ -43,6 +43,8 @@ locals {
     ELBZ_VOLTAGE_DEV_FRACTION     = tostring(var.voltage_deviation_fraction)
     ELBZ_VOLTAGE_DEV_HOLD_RECORDS = tostring(var.voltage_deviation_hold_records)
     ELBZ_NOMINAL_V_RMS_MV         = tostring(var.nominal_v_rms_mv)
+    ELBZ_VOLTAGE_DETECT_ENABLED   = var.voltage_detection_enabled ? "1" : "0"
+    ELBZ_FREQ_PLAUSIBLE_DEV_HZ    = tostring(var.freq_plausible_deviation_hz)
     ELBZ_CADENCE_ERROR_PPM        = tostring(var.cadence_error_ppm)
     NAMZ_SLACK_WEBHOOK_URL        = var.slack_webhook_url
     NAMZ_SLACK_CHANNEL            = var.slack_channel

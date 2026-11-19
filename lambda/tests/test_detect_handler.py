@@ -204,7 +204,7 @@ def test_notify_event_field_links_to_dashboard_graph(monkeypatch):
     h.handler(_event(), None)
 
     assert len(fake.calls) == 1
-    field = fake.calls[0]["fields"]["イベント"]
+    field = fake.calls[0]["fields"]["グラフ"]
     assert field.startswith("<https://dash.example/#live?m=")
     assert field.endswith("|0001-freq_deviation-0>")
 
@@ -219,7 +219,7 @@ def test_event_link_without_dashboard_url_falls_back_to_plain_id(monkeypatch):
 
     h.handler(_event(), None)
 
-    assert fake.calls[0]["fields"]["イベント"] == "0001-freq_deviation-0"
+    assert fake.calls[0]["fields"]["グラフ"] == "0001-freq_deviation-0"
 
 
 def test_event_view_window_matches_dashboard_presets():
@@ -303,4 +303,39 @@ def test_healthy_cadence_keeps_grid_detections(monkeypatch):
 
     kinds = {e for e, _ in recorded}
     assert "record_cadence" not in kinds
-    assert {"freq_deviation", "voltage_anomaly"} <= kinds
+    assert "freq_deviation" in kinds
+
+
+def test_voltage_anomaly_is_not_detected_by_default(monkeypatch):
+    prev = _steady_batch(start_us=0, freq_hz=50.0)
+    cur = _steady_batch(start_us=30_000_000, freq_hz=50.0)
+    h, fake, recorded = _handler_with_prev(monkeypatch, prev, cur)
+
+    h.handler(_event(), None)
+
+    assert recorded == []
+    assert fake.calls == []
+
+
+def test_voltage_anomaly_is_detected_when_enabled(monkeypatch):
+    prev = _steady_batch(start_us=0, freq_hz=50.0)
+    cur = _steady_batch(start_us=30_000_000, freq_hz=50.0)
+    h, fake, recorded = _handler_with_prev(monkeypatch, prev, cur)
+    monkeypatch.setattr(h, "VOLTAGE_DETECT_ENABLED", True)
+
+    h.handler(_event(), None)
+
+    assert [e for e, _ in recorded] == ["voltage_anomaly"]
+    assert "電圧が基準より *26.2% 高い*" in fake.calls[0]["text"]
+
+
+def test_freq_deviation_text_shows_direction_and_value(monkeypatch):
+    h, fake = _handler(monkeypatch)
+    monkeypatch.setattr(h.wire_gridfreq, "parse", lambda body: _batch_with_freq_deviation())
+    monkeypatch.setattr(h.grid_events, "record",
+                        lambda device_id, event_type, onset, last, peak: (
+                            f"{device_id:04d}-{event_type}-0", True))
+
+    h.handler(_event(), None)
+
+    assert "周波数が公称50Hzより *300 mHz 高い*（50.300 Hz）" in fake.calls[0]["text"]
